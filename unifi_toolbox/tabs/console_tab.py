@@ -6,88 +6,129 @@ import customtkinter as ctk
 from ..core.api_client import UniFiAPI
 from ..utils import LogFn
 
+# Shared palette
+_CARD = "#2a2a3e"
+_ACCENT = "#0f3460"
+_GREEN = "#00b894"
+_GREEN_HOVER = "#00a381"
+_DIM = "#8a8a9a"
+_LABEL_FONT = ("Segoe UI", 12)
+_HEADING_FONT = ("Segoe UI", 13, "bold")
+_ENTRY_W = 260
+
+
+def _section(parent, title: str) -> ctk.CTkFrame:
+    card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
+    card.pack(fill="x", padx=4, pady=(0, 8))
+    ctk.CTkLabel(
+        card, text=title, font=_HEADING_FONT,
+        text_color="#ffffff", anchor="w",
+    ).pack(fill="x", padx=14, pady=(10, 2))
+    sep = ctk.CTkFrame(card, height=1, fg_color="#3a3a4e")
+    sep.pack(fill="x", padx=14, pady=(0, 8))
+    return card
+
 
 class ConsoleTab(ctk.CTkFrame):
     """Console/API tab for managing UniFi controllers."""
 
     def __init__(self, parent, log_fn: LogFn, **kwargs):
-        super().__init__(parent, **kwargs)
+        super().__init__(parent, fg_color="transparent", **kwargs)
         self.log = log_fn
         self._build_ui()
 
     def _build_ui(self):
-        # --- Connection ---
-        conn_frame = ctk.CTkFrame(self)
-        conn_frame.pack(fill="x", padx=10, pady=(10, 5))
-        ctk.CTkLabel(conn_frame, text="Console Connection", font=("", 14, "bold")).pack(
-            anchor="w", padx=10, pady=(5, 0)
-        )
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
 
-        grid = ctk.CTkFrame(conn_frame)
-        grid.pack(fill="x", padx=10, pady=5)
+        # ── Console Connection ───────────────────────────────
+        conn_card = _section(scroll, "Console Connection")
+        grid = ctk.CTkFrame(conn_card, fg_color="transparent")
+        grid.pack(fill="x", padx=14, pady=(0, 10))
+        grid.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(grid, text="Console IP:").grid(row=0, column=0, sticky="e", padx=5, pady=3)
+        ctk.CTkLabel(grid, text="Console IP", font=_LABEL_FONT, anchor="e").grid(
+            row=0, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_ip = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_ip, width=220).grid(row=0, column=1, sticky="w", padx=5, pady=3)
+        ctk.CTkEntry(grid, textvariable=self.var_ip, width=_ENTRY_W, height=32).grid(
+            row=0, column=1, sticky="w", pady=4)
 
-        ctk.CTkLabel(grid, text="Admin Username:").grid(row=1, column=0, sticky="e", padx=5, pady=3)
+        ctk.CTkLabel(grid, text="Admin Username", font=_LABEL_FONT, anchor="e").grid(
+            row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_user = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_user, width=220).grid(row=1, column=1, sticky="w", padx=5, pady=3)
+        ctk.CTkEntry(grid, textvariable=self.var_user, width=_ENTRY_W, height=32).grid(
+            row=1, column=1, sticky="w", pady=4)
 
-        ctk.CTkLabel(grid, text="Admin Password:").grid(row=2, column=0, sticky="e", padx=5, pady=3)
+        ctk.CTkLabel(grid, text="Admin Password", font=_LABEL_FONT, anchor="e").grid(
+            row=2, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_pass = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=220).grid(
-            row=2, column=1, sticky="w", padx=5, pady=3
-        )
+        ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=_ENTRY_W, height=32).grid(
+            row=2, column=1, sticky="w", pady=4)
 
         self.var_ssl = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(grid, text="Verify SSL (uncheck for self-signed)", variable=self.var_ssl).grid(
-            row=3, column=1, sticky="w", padx=5, pady=3
-        )
+        ctk.CTkCheckBox(
+            grid, text="Verify SSL (uncheck for self-signed)", variable=self.var_ssl,
+            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
+        ).grid(row=3, column=1, sticky="w", pady=4)
 
-        # --- Actions ---
-        btn_frame = ctk.CTkFrame(self)
-        btn_frame.pack(fill="x", padx=10, pady=5)
+        # ── Actions ──────────────────────────────────────────
+        actions_card = _section(scroll, "Actions")
+        btn_row = ctk.CTkFrame(actions_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=14, pady=(0, 10))
 
-        ctk.CTkButton(btn_frame, text="Open Web Setup", command=self._open_web, width=140).pack(
-            side="left", padx=5
-        )
-        ctk.CTkButton(btn_frame, text="List Sites", command=self._list_sites, width=100).pack(
-            side="left", padx=5
-        )
-        ctk.CTkButton(btn_frame, text="Create Site", command=self._create_site, width=110).pack(
-            side="left", padx=5
-        )
         ctk.CTkButton(
-            btn_frame, text="Adopt by MAC", command=self._adopt_mac,
-            fg_color="#2b7a0b", hover_color="#1e5a08", width=120
-        ).pack(side="left", padx=5)
+            btn_row, text="Open Web Setup", command=self._open_web,
+            width=140, height=34, font=_LABEL_FONT,
+            fg_color=_ACCENT, hover_color="#1a4a70",
+        ).pack(side="left", padx=(0, 8))
 
-        # --- Site / MAC inputs ---
-        detail_frame = ctk.CTkFrame(self)
-        detail_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(
+            btn_row, text="List Sites", command=self._list_sites,
+            width=100, height=34, font=_LABEL_FONT,
+            fg_color="transparent", hover_color="#3a3a4e",
+            border_width=1, border_color="#4a4a5e",
+        ).pack(side="left", padx=(0, 8))
 
-        detail_grid = ctk.CTkFrame(detail_frame)
-        detail_grid.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(
+            btn_row, text="Create Site", command=self._create_site,
+            width=110, height=34, font=_LABEL_FONT,
+            fg_color="transparent", hover_color="#3a3a4e",
+            border_width=1, border_color="#4a4a5e",
+        ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkLabel(detail_grid, text="Site Name:").grid(row=0, column=0, sticky="e", padx=5, pady=3)
+        ctk.CTkButton(
+            btn_row, text="Adopt by MAC", command=self._adopt_mac,
+            width=130, height=34, font=("Segoe UI", 12, "bold"),
+            fg_color=_GREEN, hover_color=_GREEN_HOVER, text_color="#1a1a2e",
+        ).pack(side="left")
+
+        # ── Site / MAC inputs ────────────────────────────────
+        detail_card = _section(scroll, "Site & Device")
+        detail_grid = ctk.CTkFrame(detail_card, fg_color="transparent")
+        detail_grid.pack(fill="x", padx=14, pady=(0, 6))
+        detail_grid.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(detail_grid, text="Site Name", font=_LABEL_FONT, anchor="e").grid(
+            row=0, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_site = ctk.StringVar(value="default")
-        ctk.CTkEntry(detail_grid, textvariable=self.var_site, width=220).grid(
-            row=0, column=1, sticky="w", padx=5, pady=3
-        )
+        ctk.CTkEntry(detail_grid, textvariable=self.var_site, width=_ENTRY_W, height=32).grid(
+            row=0, column=1, sticky="w", pady=4)
 
-        ctk.CTkLabel(detail_grid, text="Device MAC:").grid(row=1, column=0, sticky="e", padx=5, pady=3)
+        ctk.CTkLabel(detail_grid, text="Device MAC", font=_LABEL_FONT, anchor="e").grid(
+            row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_mac = ctk.StringVar()
-        ctk.CTkEntry(detail_grid, textvariable=self.var_mac, width=220,
-                      placeholder_text="aa:bb:cc:dd:ee:ff").grid(
-            row=1, column=1, sticky="w", padx=5, pady=3
-        )
+        ctk.CTkEntry(
+            detail_grid, textvariable=self.var_mac, width=_ENTRY_W, height=32,
+            placeholder_text="aa:bb:cc:dd:ee:ff",
+        ).grid(row=1, column=1, sticky="w", pady=4)
 
         ctk.CTkLabel(
-            detail_frame,
+            detail_card,
             text="Hint: UXG -> adopt to existing site. UDM/UDR/UDM-Pro -> create its own site.",
-            font=("", 11), text_color="gray",
-        ).pack(anchor="w", padx=15, pady=(0, 5))
+            font=("Segoe UI", 11), text_color=_DIM,
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+    # ── Logic ────────────────────────────────────────────────
 
     def _get_api(self) -> UniFiAPI:
         ip = self.var_ip.get().strip()
@@ -159,7 +200,7 @@ class ConsoleTab(ctk.CTkFrame):
                 self.log(f"Adopt error: {e}")
         threading.Thread(target=worker, daemon=True).start()
 
-    # --- Profile integration ---
+    # ── Profile integration ──────────────────────────────────
 
     def load_from_profile(self, profile):
         self.var_ip.set(profile.console_ip or "")
