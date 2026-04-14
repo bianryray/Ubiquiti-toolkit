@@ -129,6 +129,14 @@ class SSHTab(ctk.CTkFrame):
             grid, textvariable=self.var_ctrl, width=340, height=32,
             placeholder_text="http://192.168.1.1:8080",
         ).grid(row=r, column=1, sticky="w", pady=4)
+        # Inline hint so users know exactly what to type and don't paste
+        # the full `set-inform` command, the /inform path, https, or
+        # the wrong port.
+        ctk.CTkLabel(
+            grid,
+            text="e.g. http://192.168.1.1:8080  (no /inform, no https, no 8443)",
+            font=("Segoe UI", 11), text_color=_DIM, anchor="w",
+        ).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=4)
 
         r = 6
         ctk.CTkLabel(grid, text="SSH Port", font=_LABEL_FONT, anchor="e").grid(
@@ -285,6 +293,9 @@ class SSHTab(ctk.CTkFrame):
         if is_batch:
             self.lbl_ip.grid_remove()
             self.ent_ip.grid_remove()
+            # In batch mode the user already has IPs (often from Discovery),
+            # so the per-device "Find on network" shortcut is just clutter.
+            self.btn_find.grid_remove()
             self.lbl_batch.grid(row=0, column=0, sticky="ne", padx=(0, 10), pady=4)
             self.ent_batch.grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
             self.lbl_batch_hint.grid(row=1, column=1, columnspan=2, sticky="w")
@@ -295,6 +306,7 @@ class SSHTab(ctk.CTkFrame):
             self.lbl_batch_hint.grid_remove()
             self.lbl_ip.grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
             self.ent_ip.grid(row=0, column=1, sticky="w", pady=4)
+            self.btn_find.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
             self.btn_adopt.configure(text="Run Adoption")
 
     # ── Helpers ──────────────────────────────────────────────

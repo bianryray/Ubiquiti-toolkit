@@ -206,6 +206,110 @@ class SSHManager:
             client.close()
             return False, "", f"Command execution failed: {e}"
 
+    def run_until_marker(
+        self,
+        cmd: str,
+        success_markers: Tuple[str, ...],
+        failure_markers: Tuple[str, ...] = (),
+        timeout: int = SSH_TIMEOUT,
+    ) -> Tuple[str, str]:
+        """Run `cmd` and stream output until a marker matches or we time out.
+
+        Why this exists: `set-inform` (and especially `mca-cli set-inform`)
+        keep the SSH session alive until the device finishes informing the
+        controller -- which can take 10-30s and sometimes never closes
+        cleanly. We don't want to wait that long, and we don't want to read
+        with `.read()` (blocks until EOF). Instead we poll the channel,
+        accumulate output, and close the connection as soon as we see the
+        canonical success line ("Adoption request sent to ...").
+
+        Returns: (status, captured_output)
+            status in {"success", "failure", "timeout", "ssh_error"}
+        """
+        try:
+            client = self._connect()
+        except Exception as e:
+            return "ssh_error", f"SSH connection failed: {e}"
+
+        success_lc = tuple(m.lower() for m in success_markers)
+        failure_lc = tuple(m.lower() for m in failure_markers)
+        captured_parts: List[str] = []
+
+        def _check_markers() -> Optional[str]:
+            text = "".join(captured_parts).lower()
+            for m in success_lc:
+                if m in text:
+                    return "success"
+            for m in failure_lc:
+                if m in text:
+                    return "failure"
+            return None
+
+        try:
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+            chan = stdout.channel
+            chan.settimeout(0.0)  # non-blocking reads via recv_ready()
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                got_data = False
+                if chan.recv_ready():
+                    try:
+                        data = chan.recv(4096).decode(errors="ignore")
+                        if data:
+                            captured_parts.append(data)
+                            got_data = True
+                    except Exception:
+                        pass
+                if chan.recv_stderr_ready():
+                    try:
+                        data = chan.recv_stderr(4096).decode(errors="ignore")
+                        if data:
+                            captured_parts.append(data)
+                            got_data = True
+                    except Exception:
+                        pass
+                if got_data:
+                    hit = _check_markers()
+                    if hit:
+                        try:
+                            client.close()
+                        except Exception:
+                            pass
+                        return hit, "".join(captured_parts)
+                if chan.exit_status_ready() and not (
+                    chan.recv_ready() or chan.recv_stderr_ready()
+                ):
+                    # Command finished cleanly. Final marker check.
+                    hit = _check_markers()
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    if hit:
+                        return hit, "".join(captured_parts)
+                    return "failure", "".join(captured_parts)
+                if not got_data:
+                    time.sleep(0.1)
+            # Hit timeout. If something useful arrived, hand it back.
+            try:
+                client.close()
+            except Exception:
+                pass
+            hit = _check_markers()
+            if hit:
+                return hit, "".join(captured_parts)
+            return "timeout", "".join(captured_parts)
+        except Exception as e:
+            try:
+                client.close()
+            except Exception:
+                pass
+            captured_parts.append(f"\n[exec error] {e}")
+            hit = _check_markers()
+            if hit:
+                return hit, "".join(captured_parts)
+            return "ssh_error", "".join(captured_parts)
+
     def run_visible(
         self, cmd: str, timeout: int = SSH_TIMEOUT
     ) -> Tuple[bool, str, str]:
@@ -252,21 +356,28 @@ class SSHManager:
     ) -> Dict:
         """Send a single set-inform to the device.
 
-        Keep it minimal: every extra set-inform sends a fresh adoption request
-        to the controller, which can overwhelm hosted controllers (HostiFi,
-        UI.com cloud, etc). So we fire *one* command and trust the result.
-        We only fall back to `mca-cli set-inform` if the direct binary is
-        literally missing on the device (older firmware / UniFi-OS consoles).
+        Two key invariants:
+          1. We send `set-inform` ONCE. Hosted controllers (HostiFi, UI.com
+             cloud) get hammered if multiple inform requests fan in from
+             one device, so we never fall through to a second set-inform on
+             the same device unless the first one literally couldn't find
+             the binary.
+          2. We use the canonical success line as the trigger to stop:
+             "Adoption request sent to '<url>'. Use UniFi Network to
+             complete the adopt process." When that appears in stdout we
+             know the command worked, and we close our SSH connection
+             without waiting for the device-side adoption flow to fully
+             settle (which can take 30s+ and sometimes never closes the
+             channel cleanly).
         """
         results: Dict = {"ip": self.host, "attempts": []}
 
-        def record(cmd: str, ok, out: str, err: str):
+        def record(cmd: str, status, out: str):
             results.setdefault("attempts", []).append(
                 {
                     "cmd": cmd,
-                    "ok": ok,
+                    "status": status,
                     "out": (out or "").strip(),
-                    "err": (err or "").strip(),
                 }
             )
 
@@ -276,74 +387,110 @@ class SSHManager:
             return results
 
         inform = build_inform_url(controller_url)
-        primary = f"set-inform {inform}"
-        fallback = f"mca-cli set-inform {inform}"
 
-        # Indicators that the *binary itself* isn't present -- the ONLY case
-        # where we're willing to send a second inform request.
-        missing_binary_markers = (
-            "command not found",
-            "not found",
-            "no such file",
-            "unrecognized",
+        # Why the `sh -c '. /etc/profile ...'` wrapper:
+        # When paramiko exec_command()s a single command, the resulting
+        # shell is non-login + non-interactive, so /etc/profile is NOT
+        # sourced and PATH is the bare default (often just /bin:/sbin).
+        # That's why `set-inform` works when you SSH in by hand but came
+        # back as "ash: set-inform: not found" through the toolbox. By
+        # sourcing /etc/profile ourselves, we get the same PATH the
+        # interactive login gets.
+        # `exec` replaces the shell with the binary, so:
+        #   - exit code is the binary's (no `||` fallthrough)
+        #   - only ONE set-inform fires (no risk of double-informing the
+        #     controller)
+        primary = (
+            "sh -c '. /etc/profile 2>/dev/null; "
+            "exec set-inform \"" + inform + "\"'"
+        )
+        fallback = (
+            "sh -c '. /etc/profile 2>/dev/null; "
+            "exec mca-cli set-inform \"" + inform + "\"'"
         )
 
-        def _attempt(cmd: str) -> Tuple[Optional[bool], str, str, str]:
-            if dry_run:
-                self.log(f"[DRY RUN] Would run: {cmd}")
-                record(cmd, None, "(dry run)", "")
-                return None, "", "", ""
-            self.log(f"Running: {cmd}")
-            ok, out, err = self.run(cmd)
-            record(cmd, ok, out, err)
-            # Echo whatever the device actually replied with so the user
-            # sees the real "Adoption request sent to ..." line instead of a
-            # summary that hides it.
-            if out and out.strip():
-                for line in out.strip().splitlines():
-                    self.log(f"  {line}")
-            if err and err.strip():
-                for line in err.strip().splitlines():
-                    self.log(f"  (stderr) {line}")
-            combined = ((out or "") + "\n" + (err or "")).lower()
-            return ok, out, err, combined
+        # Canonical success line printed by the set-inform binary on every
+        # currently-shipping firmware.
+        success_markers = (
+            "adoption request sent",
+            "successfully informed",
+        )
+        # Failure markers we treat as terminal -- give up immediately.
+        other_failure_markers = (
+            "permission denied",
+            "operation not permitted",
+            "no such file or directory",
+        )
 
-        # ---- 1. One attempt with the canonical command ---------------
-        ok, out, err, combined = _attempt(primary)
+        # ---- Primary attempt --------------------------------------------
         if dry_run:
-            # No second command on dry run either.
+            self.log(f"[DRY RUN] Would run: set-inform {inform}")
+            record(primary, "dry_run", "")
             results["adopted"] = None
             return results
 
-        missing = any(m in combined for m in missing_binary_markers)
+        self.log(f"Sending: set-inform {inform}")
+        status, output = self.run_until_marker(
+            primary,
+            success_markers=success_markers,
+            failure_markers=other_failure_markers,
+            timeout=20,
+        )
+        record(primary, status, output)
+        if output.strip():
+            for line in output.strip().splitlines():
+                self.log(f"  {line}")
 
-        if ok and not missing:
+        if status == "success":
             results["adopted"] = True
-            results["successful_cmd"] = primary
+            results["successful_cmd"] = "set-inform"
             self.log(
                 "[OK] Adopted. Finish the pairing in your UniFi Network "
                 "controller (Devices -> Pending Adoption)."
             )
             return results
 
-        # ---- 2. Only fall back if the binary was missing -------------
-        if not missing:
-            # Something else went wrong (auth, network, non-zero exit with
-            # a real error). DON'T spam a second set-inform at the
-            # controller -- report failure and stop.
+        # ---- Decide whether to retry ------------------------------------
+        out_lc = output.lower()
+        # `ash` prints "set-inform: not found" when neither /etc/profile
+        # nor the bare PATH had it. THAT is the only legitimate reason to
+        # retry with mca-cli.
+        binary_missing = (
+            ("set-inform" in out_lc and "not found" in out_lc)
+            or "command not found" in out_lc
+        )
+
+        if not binary_missing:
+            # Real error (network, permission, controller URL bad, etc).
+            # Don't fire a second inform.
             results["adopted"] = False
             self.log(
-                "Adoption failed. Not retrying -- a second set-inform would "
-                "just send another adoption request to the controller."
+                "Adoption failed. Not retrying with a second command -- "
+                "that would just queue another adoption request at the "
+                "controller. See checklist below."
             )
+            self._log_failure_checklist()
             return results
 
-        self.log("`set-inform` binary not found on device; "
-                 "falling back to `mca-cli set-inform` (one retry only).")
-        ok2, out2, err2, combined2 = _attempt(fallback)
-        if ok2 and not any(m in combined2 for m in missing_binary_markers):
+        # ---- Single fallback: mca-cli set-inform ------------------------
+        self.log(
+            "`set-inform` not on PATH even after sourcing /etc/profile; "
+            "trying `mca-cli set-inform` once."
+        )
+        status2, output2 = self.run_until_marker(
+            fallback,
+            success_markers=success_markers,
+            failure_markers=other_failure_markers,
+            timeout=20,
+        )
+        record(fallback, status2, output2)
+        if output2.strip():
+            for line in output2.strip().splitlines():
+                self.log(f"  {line}")
+
+        if status2 == "success":
             results["adopted"] = True
-            results["successful_cmd"] = fallback
+            results["successful_cmd"] = "mca-cli set-inform"
             self.log(
                 "[OK] Adopted via mca-cli. Finish the pairing in your "
                 "UniFi Network controller (Devices -> Pending Adoption)."
@@ -351,12 +498,22 @@ class SSHManager:
             return results
 
         results["adopted"] = False
-        self.log(
-            "Adoption attempts did not succeed. "
-            "Check controller URL (/inform), port 8080, "
-            "or reset if previously adopted."
-        )
+        self._log_failure_checklist()
         return results
+
+    def _log_failure_checklist(self):
+        self.log(
+            "[FAIL] Adoption did not succeed. Things to check:\n"
+            "  1. Controller URL is reachable from the device "
+            "(http://<controller-ip>:8080, NOT https, NOT port 443/8443).\n"
+            "  2. Device hasn't already been adopted by another controller "
+            "(factory-reset it via the Factory Reset section if so).\n"
+            "  3. SSH credentials are correct (try the 'Use default ubnt / "
+            "ubnt' checkbox for factory-fresh devices).\n"
+            "  4. For older firmware, try SSHing in manually and running:\n"
+            "       set-inform http://<controller-ip>:8080/inform\n"
+            "     so you can see the device's full response."
+        )
 
     def factory_reset_syswrapper(self) -> Tuple[bool, str, str]:
         return self.run("syswrapper.sh restore-default")
