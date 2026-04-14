@@ -310,6 +310,123 @@ class SSHManager:
                 return hit, "".join(captured_parts)
             return "ssh_error", "".join(captured_parts)
 
+    def run_interactive(
+        self,
+        cmd: str,
+        success_markers: Tuple[str, ...],
+        failure_markers: Tuple[str, ...] = (),
+        timeout: int = SSH_TIMEOUT,
+        drain_seconds: float = 2.5,
+    ) -> Tuple[str, str]:
+        """Open an interactive shell, type `cmd`, watch output for markers.
+
+        Why this and not exec_command():
+            On many Ubiquiti devices `set-inform` is NOT a binary on PATH --
+            it's a shell function defined in /etc/profile.d/ that's only
+            loaded when you get a real interactive login shell. paramiko's
+            exec_command() is a non-login non-interactive shell, so the
+            function never gets defined and you see "set-inform: not found"
+            even though typing it manually after SSHing in works fine.
+            invoke_shell() gives us the same context the user gets by hand.
+
+        Returns: (status, captured_output)
+            status in {"success", "failure", "timeout", "ssh_error"}
+            captured_output includes everything the shell printed,
+            including the MOTD banner.
+        """
+        try:
+            client = self._connect()
+        except Exception as e:
+            return "ssh_error", f"SSH connection failed: {e}"
+
+        success_lc = tuple(m.lower() for m in success_markers)
+        failure_lc = tuple(m.lower() for m in failure_markers)
+        captured: List[str] = []
+
+        def _check() -> Optional[str]:
+            text = "".join(captured).lower()
+            for m in success_lc:
+                if m in text:
+                    return "success"
+            for m in failure_lc:
+                if m in text:
+                    return "failure"
+            return None
+
+        chan = None
+        try:
+            chan = client.invoke_shell(width=200, height=50)
+            chan.settimeout(0.0)
+
+            # Drain the login banner / MOTD before sending our command. We
+            # don't try to detect a "prompt" -- prompt regexes vary wildly
+            # across Ubiquiti firmwares -- a fixed drain window is reliable
+            # enough.
+            drain_until = time.monotonic() + drain_seconds
+            while time.monotonic() < drain_until:
+                if chan.recv_ready():
+                    try:
+                        data = chan.recv(4096).decode(errors="ignore")
+                        if data:
+                            captured.append(data)
+                    except Exception:
+                        pass
+                else:
+                    time.sleep(0.1)
+
+            # Type the command + Enter, exactly like a user would.
+            try:
+                chan.send(cmd + "\n")
+            except Exception as e:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                return "ssh_error", f"Couldn't send command: {e}"
+
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if chan.recv_ready():
+                    try:
+                        data = chan.recv(4096).decode(errors="ignore")
+                        if data:
+                            captured.append(data)
+                            hit = _check()
+                            if hit:
+                                try:
+                                    chan.send("exit\n")
+                                except Exception:
+                                    pass
+                                try:
+                                    client.close()
+                                except Exception:
+                                    pass
+                                return hit, "".join(captured)
+                    except Exception:
+                        pass
+                else:
+                    time.sleep(0.1)
+
+            # Timeout.
+            try:
+                chan.send("exit\n")
+            except Exception:
+                pass
+            try:
+                client.close()
+            except Exception:
+                pass
+            hit = _check()
+            if hit:
+                return hit, "".join(captured)
+            return "timeout", "".join(captured)
+        except Exception as e:
+            try:
+                client.close()
+            except Exception:
+                pass
+            return "ssh_error", f"Interactive shell error: {e}"
+
     def run_visible(
         self, cmd: str, timeout: int = SSH_TIMEOUT
     ) -> Tuple[bool, str, str]:
@@ -388,26 +505,12 @@ class SSHManager:
 
         inform = build_inform_url(controller_url)
 
-        # Why the `sh -c '. /etc/profile ...'` wrapper:
-        # When paramiko exec_command()s a single command, the resulting
-        # shell is non-login + non-interactive, so /etc/profile is NOT
-        # sourced and PATH is the bare default (often just /bin:/sbin).
-        # That's why `set-inform` works when you SSH in by hand but came
-        # back as "ash: set-inform: not found" through the toolbox. By
-        # sourcing /etc/profile ourselves, we get the same PATH the
-        # interactive login gets.
-        # `exec` replaces the shell with the binary, so:
-        #   - exit code is the binary's (no `||` fallthrough)
-        #   - only ONE set-inform fires (no risk of double-informing the
-        #     controller)
-        primary = (
-            "sh -c '. /etc/profile 2>/dev/null; "
-            "exec set-inform \"" + inform + "\"'"
-        )
-        fallback = (
-            "sh -c '. /etc/profile 2>/dev/null; "
-            "exec mca-cli set-inform \"" + inform + "\"'"
-        )
+        # Type the command into a real interactive shell -- on Ubiquiti
+        # devices `set-inform` is often a shell function defined in
+        # /etc/profile.d/ that's only available in an interactive login
+        # context, NOT in paramiko's exec_command() shell.
+        primary = f"set-inform {inform}"
+        fallback = f"mca-cli set-inform {inform}"
 
         # Canonical success line printed by the set-inform binary on every
         # currently-shipping firmware.
@@ -430,15 +533,20 @@ class SSHManager:
             return results
 
         self.log(f"Sending: set-inform {inform}")
-        status, output = self.run_until_marker(
+        status, output = self.run_interactive(
             primary,
             success_markers=success_markers,
             failure_markers=other_failure_markers,
-            timeout=20,
+            timeout=25,
         )
         record(primary, status, output)
-        if output.strip():
-            for line in output.strip().splitlines():
+        # Echo only the bit after our command was sent (keeps the MOTD
+        # noise out of the visible log). The interactive shell echoes our
+        # command back, so split on it.
+        relevant = output.split(primary, 1)[-1]
+        for line in relevant.strip().splitlines():
+            line = line.rstrip()
+            if line:
                 self.log(f"  {line}")
 
         if status == "success":
@@ -474,18 +582,20 @@ class SSHManager:
 
         # ---- Single fallback: mca-cli set-inform ------------------------
         self.log(
-            "`set-inform` not on PATH even after sourcing /etc/profile; "
+            "`set-inform` not available even in interactive shell; "
             "trying `mca-cli set-inform` once."
         )
-        status2, output2 = self.run_until_marker(
+        status2, output2 = self.run_interactive(
             fallback,
             success_markers=success_markers,
             failure_markers=other_failure_markers,
-            timeout=20,
+            timeout=25,
         )
         record(fallback, status2, output2)
-        if output2.strip():
-            for line in output2.strip().splitlines():
+        relevant2 = output2.split(fallback, 1)[-1]
+        for line in relevant2.strip().splitlines():
+            line = line.rstrip()
+            if line:
                 self.log(f"  {line}")
 
         if status2 == "success":
