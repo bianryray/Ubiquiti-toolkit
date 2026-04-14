@@ -350,37 +350,18 @@ class SSHManager:
             )
             return results
 
-        # Special case: `mca-cli set-inform` on UniFi-OS consoles tends to
-        # tear down the SSH session partway through (the device reconnects
-        # to the controller and kills our shell). Paramiko raises, we
-        # re-wrap it as "Command execution failed: ...", but the command
-        # actually ran. If we see that specific pattern AND there's no
-        # genuine "not found" / auth / network error, trust it.
-        ssh_teardown = (
-            "command execution failed" in combined2
-            and not any(m in combined2 for m in missing_binary_markers)
-            and "authentication" not in combined2
-            and "connection refused" not in combined2
-            and "name or service not known" not in combined2
-            and "no route to host" not in combined2
-        )
-        if ssh_teardown:
-            results["adopted"] = True
-            results["successful_cmd"] = fallback
-            results["probable"] = True
-            self.log(
-                "[OK] mca-cli disconnected the SSH session mid-command "
-                "(normal behavior during adoption). "
-                "Check the controller -- the device should now appear under "
-                "Devices -> Pending Adoption."
-            )
-            return results
-
         results["adopted"] = False
         self.log(
-            "Adoption attempts did not succeed. "
-            "Check controller URL (/inform), port 8080, "
-            "or reset if previously adopted."
+            "[FAIL] Adoption did not succeed. Things to check:\n"
+            "  1. Controller URL is reachable from the device "
+            "(http://<controller-ip>:8080, NOT https, NOT port 443/8443).\n"
+            "  2. Device hasn't already been adopted by another controller "
+            "(factory-reset it via the Factory Reset section if so).\n"
+            "  3. SSH credentials are correct (try the 'Use default ubnt / "
+            "ubnt' checkbox for factory-fresh devices).\n"
+            "  4. For older firmware, try SSHing in manually and running:\n"
+            "       set-inform http://<controller-ip>:8080/inform\n"
+            "     so you can see the device's full response."
         )
         return results
 

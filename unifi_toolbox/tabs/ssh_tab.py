@@ -129,6 +129,14 @@ class SSHTab(ctk.CTkFrame):
             grid, textvariable=self.var_ctrl, width=340, height=32,
             placeholder_text="http://192.168.1.1:8080",
         ).grid(row=r, column=1, sticky="w", pady=4)
+        # Inline hint so users know exactly what to type and don't paste
+        # the full `set-inform` command, the /inform path, https, or
+        # the wrong port.
+        ctk.CTkLabel(
+            grid,
+            text="e.g. http://192.168.1.1:8080  (no /inform, no https, no 8443)",
+            font=("Segoe UI", 11), text_color=_DIM, anchor="w",
+        ).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=4)
 
         r = 6
         ctk.CTkLabel(grid, text="SSH Port", font=_LABEL_FONT, anchor="e").grid(
