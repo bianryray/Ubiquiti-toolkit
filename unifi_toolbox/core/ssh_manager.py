@@ -250,6 +250,14 @@ class SSHManager:
     def adopt(
         self, controller_url: str, dry_run: bool = False
     ) -> Dict:
+        """Send a single set-inform to the device.
+
+        Keep it minimal: every extra set-inform sends a fresh adoption request
+        to the controller, which can overwhelm hosted controllers (HostiFi,
+        UI.com cloud, etc). So we fire *one* command and trust the result.
+        We only fall back to `mca-cli set-inform` if the direct binary is
+        literally missing on the device (older firmware / UniFi-OS consoles).
+        """
         results: Dict = {"ip": self.host, "attempts": []}
 
         def record(cmd: str, ok, out: str, err: str):
@@ -262,61 +270,89 @@ class SSHManager:
                 }
             )
 
-        info_cmd = (
-            "info || ubntbox-info || mca-cli show | sed -n '1,60p'"
+        if not controller_url:
+            self.log("No controller URL provided; skipping set-inform.")
+            results["adopted"] = False
+            return results
+
+        inform = build_inform_url(controller_url)
+        primary = f"set-inform {inform}"
+        fallback = f"mca-cli set-inform {inform}"
+
+        # Indicators that the *binary itself* isn't present -- the ONLY case
+        # where we're willing to send a second inform request.
+        missing_binary_markers = (
+            "command not found",
+            "not found",
+            "no such file",
+            "unrecognized",
         )
-        if dry_run:
-            self.log(f"[DRY RUN] Would run: {info_cmd}")
-            record(info_cmd, None, "(dry run)", "")
-        else:
-            ok, out, err = self.run(info_cmd)
-            record(info_cmd, ok, out, err)
-            if out.strip():
-                self.log("--- Device info ---")
-                self.log("\n".join(out.strip().splitlines()[:25]))
-            if err.strip():
-                self.log(f"(stderr) {err.strip()}")
 
-        adopt_cmds: List[str] = []
-        if controller_url:
-            inform = build_inform_url(controller_url)
-            adopt_cmds.extend(
-                [
-                    f"set-inform {inform}",
-                    f"mca-cli set-inform {inform}",
-                    f"syswrapper.sh set-inform {inform}",
-                    f"echo 'set-inform {inform}' > /tmp/adopt_cmd && sh /tmp/adopt_cmd",
-                ]
-            )
-        else:
-            adopt_cmds.append(
-                "# no controller URL provided - skipping set-inform"
-            )
+        # Positive wording some firmwares print. We don't require this -- a
+        # clean exit is enough -- but when it's there we log nicer output.
+        positive_markers = (
+            "adoption request sent",
+            "adoption request",
+            "set-inform sent",
+            "informed",
+            "successfully",
+            "success",
+        )
 
-        for cmd in adopt_cmds:
+        def _attempt(cmd: str) -> Tuple[Optional[bool], str, str, str]:
             if dry_run:
                 self.log(f"[DRY RUN] Would run: {cmd}")
                 record(cmd, None, "(dry run)", "")
-                continue
+                return None, "", "", ""
             self.log(f"Running: {cmd}")
             ok, out, err = self.run(cmd)
             record(cmd, ok, out, err)
             combined = ((out or "") + "\n" + (err or "")).lower()
-            if ok and (
-                "success" in combined
-                or "informed" in combined
-                or ("set-inform" in cmd and "ok" in combined)
-                or "url" in combined
-            ):
-                results["adopted"] = True
-                results["successful_cmd"] = cmd
+            return ok, out, err, combined
+
+        # ---- 1. One attempt with the canonical command ---------------
+        ok, out, err, combined = _attempt(primary)
+        if dry_run:
+            # No second command on dry run either.
+            results["adopted"] = None
+            return results
+
+        missing = any(m in combined for m in missing_binary_markers)
+
+        if ok and not missing:
+            results["adopted"] = True
+            results["successful_cmd"] = primary
+            if any(m in combined for m in positive_markers):
                 self.log("Adoption command succeeded.")
-                return results
-            time.sleep(1)
+            else:
+                self.log("Adoption command sent (exit 0). "
+                         "Check the controller to confirm.")
+            return results
+
+        # ---- 2. Only fall back if the binary was missing -------------
+        if not missing:
+            # Something else went wrong (auth, network, non-zero exit with
+            # a real error). DON'T spam a second set-inform at the
+            # controller -- report failure and stop.
+            results["adopted"] = False
+            self.log(
+                "Adoption failed. Not retrying -- a second set-inform would "
+                "just send another adoption request to the controller."
+            )
+            return results
+
+        self.log("`set-inform` binary not found on device; "
+                 "falling back to `mca-cli set-inform` (one retry only).")
+        ok2, out2, err2, combined2 = _attempt(fallback)
+        if ok2 and not any(m in combined2 for m in missing_binary_markers):
+            results["adopted"] = True
+            results["successful_cmd"] = fallback
+            self.log("Adoption command succeeded (via mca-cli).")
+            return results
 
         results["adopted"] = False
         self.log(
-            "Adoption attempts did not clearly succeed. "
+            "Adoption attempts did not succeed. "
             "Check controller URL (/inform), port 8080, "
             "or reset if previously adopted."
         )

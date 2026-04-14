@@ -64,13 +64,25 @@ python main.py
 
 ### Build standalone `.exe`
 
-```bash
-# Windows — double-click build.bat, or:
-pip install -r requirements.txt
-pyinstaller --onefile --windowed --name "UniFi Toolbox" --collect-all customtkinter main.py
+On Windows, just double-click `build.bat`. It uses the `py` launcher (bundled
+with standard Python installs) and invokes pip / PyInstaller via `python -m`,
+so it works even if the `Scripts\` folder isn't on `PATH`.
+
+If you prefer to run the commands manually:
+
+```bat
+py -m pip install -r requirements.txt
+py -m PyInstaller --onefile --windowed --name "UniFi Toolbox" --collect-all customtkinter main.py
 ```
 
 The output will be at `dist/UniFi Toolbox.exe`. Share this single file — it runs on any Windows machine with no dependencies.
+
+#### Troubleshooting: `'pip' is not recognized` / `'pyinstaller' is not recognized`
+
+This means Python's `Scripts\` folder isn't on `PATH`. Two fixes:
+
+1. **Re-run the Python installer** and tick *"Add Python to PATH"* (or *"Add python.exe to PATH"* in newer installers), then restart the terminal.
+2. **Or just use the updated `build.bat`** — it calls `py -m pip` and `py -m PyInstaller` directly, which doesn't require `Scripts\` on `PATH`.
 
 ## Project Structure
 
