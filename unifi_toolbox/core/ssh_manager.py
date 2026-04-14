@@ -388,19 +388,26 @@ class SSHManager:
 
         inform = build_inform_url(controller_url)
 
-        # Try absolute paths first (login-shell PATH isn't guaranteed when
-        # paramiko exec's a one-shot command). Use `exec` so the binary
-        # replaces the shell -- exit code is the binary's, no `||`
-        # fallthrough on real errors.
+        # Why the `sh -c '. /etc/profile ...'` wrapper:
+        # When paramiko exec_command()s a single command, the resulting
+        # shell is non-login + non-interactive, so /etc/profile is NOT
+        # sourced and PATH is the bare default (often just /bin:/sbin).
+        # That's why `set-inform` works when you SSH in by hand but came
+        # back as "ash: set-inform: not found" through the toolbox. By
+        # sourcing /etc/profile ourselves, we get the same PATH the
+        # interactive login gets.
+        # `exec` replaces the shell with the binary, so:
+        #   - exit code is the binary's (no `||` fallthrough)
+        #   - only ONE set-inform fires (no risk of double-informing the
+        #     controller)
         primary = (
-            "sh -c '"
-            "for p in /usr/sbin/set-inform /sbin/set-inform /usr/bin/set-inform; do "
-            "if [ -x \"$p\" ]; then exec \"$p\" \"" + inform + "\"; fi; done; "
-            "if command -v set-inform >/dev/null 2>&1; then "
-            "exec set-inform \"" + inform + "\"; fi; "
-            "echo __SETINFORM_BINARY_NOT_FOUND__; exit 127'"
+            "sh -c '. /etc/profile 2>/dev/null; "
+            "exec set-inform \"" + inform + "\"'"
         )
-        fallback = f"mca-cli set-inform {inform}"
+        fallback = (
+            "sh -c '. /etc/profile 2>/dev/null; "
+            "exec mca-cli set-inform \"" + inform + "\"'"
+        )
 
         # Canonical success line printed by the set-inform binary on every
         # currently-shipping firmware.
@@ -408,15 +415,11 @@ class SSHManager:
             "adoption request sent",
             "successfully informed",
         )
-        # Hard failure markers -- when we see these, give up immediately.
-        binary_missing_markers = (
-            "__setinform_binary_not_found__",
-        )
+        # Failure markers we treat as terminal -- give up immediately.
         other_failure_markers = (
             "permission denied",
             "operation not permitted",
             "no such file or directory",
-            "command not found",
         )
 
         # ---- Primary attempt --------------------------------------------
@@ -430,14 +433,12 @@ class SSHManager:
         status, output = self.run_until_marker(
             primary,
             success_markers=success_markers,
-            failure_markers=binary_missing_markers + other_failure_markers,
+            failure_markers=other_failure_markers,
             timeout=20,
         )
         record(primary, status, output)
         if output.strip():
             for line in output.strip().splitlines():
-                if "__setinform_binary_not_found__" in line.lower():
-                    continue  # internal sentinel, hide from user
                 self.log(f"  {line}")
 
         if status == "success":
@@ -451,11 +452,12 @@ class SSHManager:
 
         # ---- Decide whether to retry ------------------------------------
         out_lc = output.lower()
-        binary_missing = any(m in out_lc for m in binary_missing_markers) or (
-            # Catch the older shell-level "set-inform: not found" too --
-            # that's what `ash` prints when our absolute-path lookup found
-            # nothing AND PATH didn't have it either.
-            "set-inform" in out_lc and "not found" in out_lc
+        # `ash` prints "set-inform: not found" when neither /etc/profile
+        # nor the bare PATH had it. THAT is the only legitimate reason to
+        # retry with mca-cli.
+        binary_missing = (
+            ("set-inform" in out_lc and "not found" in out_lc)
+            or "command not found" in out_lc
         )
 
         if not binary_missing:
@@ -472,7 +474,7 @@ class SSHManager:
 
         # ---- Single fallback: mca-cli set-inform ------------------------
         self.log(
-            "`set-inform` binary not in the usual paths; "
+            "`set-inform` not on PATH even after sourcing /etc/profile; "
             "trying `mca-cli set-inform` once."
         )
         status2, output2 = self.run_until_marker(
