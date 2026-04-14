@@ -285,6 +285,9 @@ class SSHTab(ctk.CTkFrame):
         if is_batch:
             self.lbl_ip.grid_remove()
             self.ent_ip.grid_remove()
+            # In batch mode the user already has IPs (often from Discovery),
+            # so the per-device "Find on network" shortcut is just clutter.
+            self.btn_find.grid_remove()
             self.lbl_batch.grid(row=0, column=0, sticky="ne", padx=(0, 10), pady=4)
             self.ent_batch.grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
             self.lbl_batch_hint.grid(row=1, column=1, columnspan=2, sticky="w")
@@ -295,6 +298,7 @@ class SSHTab(ctk.CTkFrame):
             self.lbl_batch_hint.grid_remove()
             self.lbl_ip.grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
             self.ent_ip.grid(row=0, column=1, sticky="w", pady=4)
+            self.btn_find.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
             self.btn_adopt.configure(text="Run Adoption")
 
     # ── Helpers ──────────────────────────────────────────────
