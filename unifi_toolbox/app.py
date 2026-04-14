@@ -7,18 +7,25 @@ from .core.updater import check_for_update_async, open_download_page
 from .tabs.ssh_tab import SSHTab
 from .tabs.console_tab import ConsoleTab
 from .tabs.discovery_tab import DiscoveryTab
+from .tabs.troubleshoot_tab import TroubleshootTab
 from .tabs.profiles_tab import ProfilesTab
 
 # -- Color palette --
+# Each tuple is (light_mode_color, dark_mode_color). CustomTkinter switches
+# automatically based on the current appearance mode.
 CLR_BG_DARK = "#1a1a2e"
-CLR_HEADER = "#16213e"
-CLR_ACCENT = "#0f3460"
+CLR_HEADER = ("#2a3e5c", "#16213e")
+CLR_ACCENT = ("#3b5998", "#0f3460")
 CLR_HIGHLIGHT = "#e94560"
 CLR_SUCCESS = "#00b894"
-CLR_TEXT = "#eaeaea"
-CLR_TEXT_DIM = "#8a8a9a"
-CLR_CARD = "#2a2a3e"
-CLR_UPDATE_BG = "#1e3a5f"
+CLR_TEXT = ("#1a1a2e", "#eaeaea")
+CLR_TEXT_DIM = ("#6a6a7a", "#8a8a9a")
+CLR_CARD = ("#ffffff", "#2a2a3e")
+CLR_UPDATE_BG = ("#dde9ff", "#1e3a5f")
+CLR_LOG_BG = ("#fafafa", "#1e1e2e")
+CLR_LOG_TEXT = ("#2a2a3e", "#d4d4d4")
+CLR_BORDER = ("#d0d0dc", "#4a4a5e")
+CLR_GHOST_HOVER = ("#e4e4ec", "#3a3a4e")
 
 
 class UniFiToolboxApp(ctk.CTk):
@@ -116,9 +123,13 @@ class UniFiToolboxApp(ctk.CTk):
         tab_ssh = self.tabview.add("  SSH Adoption  ")
         tab_console = self.tabview.add("  Console / API  ")
         tab_discovery = self.tabview.add("  Discovery  ")
+        tab_troubleshoot = self.tabview.add("  Troubleshoot  ")
         tab_profiles = self.tabview.add("  Profiles  ")
 
-        self.ssh_tab = SSHTab(tab_ssh, log_fn=self.log_threadsafe)
+        self.ssh_tab = SSHTab(
+            tab_ssh, log_fn=self.log_threadsafe,
+            on_find_devices=lambda: self.tabview.set("  Discovery  "),
+        )
         self.ssh_tab.pack(fill="both", expand=True)
 
         self.console_tab = ConsoleTab(tab_console, log_fn=self.log_threadsafe)
@@ -129,6 +140,11 @@ class UniFiToolboxApp(ctk.CTk):
             on_adopt_selected=self._on_discovery_adopt,
         )
         self.discovery_tab.pack(fill="both", expand=True)
+
+        self.troubleshoot_tab = TroubleshootTab(
+            tab_troubleshoot, log_fn=self.log_threadsafe,
+        )
+        self.troubleshoot_tab.pack(fill="both", expand=True)
 
         self.profiles_tab = ProfilesTab(
             tab_profiles, log_fn=self.log_threadsafe,
@@ -152,15 +168,15 @@ class UniFiToolboxApp(ctk.CTk):
         ctk.CTkButton(
             log_header, text="Clear", width=60, height=26,
             font=("Segoe UI", 11),
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
+            fg_color="transparent", hover_color=CLR_GHOST_HOVER,
+            border_width=1, border_color=CLR_BORDER, text_color=CLR_TEXT,
             command=self._clear_log,
         ).pack(side="right")
 
         self.log_box = ctk.CTkTextbox(
             log_frame, height=130, wrap="word",
             font=("Consolas", 12),
-            fg_color="#1e1e2e", text_color="#d4d4d4",
+            fg_color=CLR_LOG_BG, text_color=CLR_LOG_TEXT,
             corner_radius=6,
         )
         self.log_box.pack(fill="x", padx=12, pady=(6, 10))

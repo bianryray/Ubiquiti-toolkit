@@ -36,9 +36,10 @@ def _section(parent, title: str) -> ctk.CTkFrame:
 class SSHTab(ctk.CTkFrame):
     """SSH adoption tab -- single device and batch mode."""
 
-    def __init__(self, parent, log_fn: LogFn, **kwargs):
+    def __init__(self, parent, log_fn: LogFn, on_find_devices=None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.log = log_fn
+        self.on_find_devices = on_find_devices  # callback to switch to Discovery tab
         self.current_task = None
         self._build_ui()
 
@@ -77,6 +78,15 @@ class SSHTab(ctk.CTkFrame):
         self.ent_ip = ctk.CTkEntry(grid, textvariable=self.var_ip, width=_ENTRY_W, height=32)
         self.ent_ip.grid(row=r, column=1, sticky="w", pady=4)
 
+        # Quick link to the Discovery tab so you don't have to leave Connection
+        self.btn_find = ctk.CTkButton(
+            grid, text="Find on network", command=self._on_find_devices,
+            width=130, height=32, font=("Segoe UI", 11),
+            fg_color="transparent", hover_color="#3a3a4e",
+            border_width=1, border_color="#4a4a5e",
+        )
+        self.btn_find.grid(row=r, column=2, sticky="w", padx=(10, 0), pady=4)
+
         # Batch targets (hidden by default)
         self.lbl_batch = ctk.CTkLabel(grid, text="Targets", font=_LABEL_FONT, anchor="e")
         self.var_batch = ctk.StringVar()
@@ -93,15 +103,23 @@ class SSHTab(ctk.CTkFrame):
         ctk.CTkLabel(grid, text="Username", font=_LABEL_FONT, anchor="e").grid(
             row=r, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_user = ctk.StringVar(value="ubnt")
-        ctk.CTkEntry(grid, textvariable=self.var_user, width=_ENTRY_W, height=32).grid(
-            row=r, column=1, sticky="w", pady=4)
+        self.ent_user = ctk.CTkEntry(grid, textvariable=self.var_user, width=_ENTRY_W, height=32)
+        self.ent_user.grid(row=r, column=1, sticky="w", pady=4)
 
         r = 4
         ctk.CTkLabel(grid, text="Password", font=_LABEL_FONT, anchor="e").grid(
             row=r, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_pass = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=_ENTRY_W, height=32).grid(
-            row=r, column=1, sticky="w", pady=4)
+        self.ent_pass = ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=_ENTRY_W, height=32)
+        self.ent_pass.grid(row=r, column=1, sticky="w", pady=4)
+
+        # Default credentials toggle: auto-fill + lock user/pass to ubnt/ubnt
+        self.var_default_creds = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            grid, text="Use default ubnt / ubnt (factory-fresh devices)",
+            variable=self.var_default_creds, command=self._on_toggle_default_creds,
+            font=("Segoe UI", 11), checkbox_width=18, checkbox_height=18,
+        ).grid(row=r, column=2, sticky="w", padx=(16, 0), pady=4)
 
         r = 5
         ctk.CTkLabel(grid, text="Controller URL", font=_LABEL_FONT, anchor="e").grid(
@@ -237,6 +255,28 @@ class SSHTab(ctk.CTkFrame):
 
         # Initial mode state
         self._on_mode_change()
+
+    # ── Default credentials lock ────────────────────────────
+
+    def _on_toggle_default_creds(self):
+        """When checked, fill user/pass with ubnt/ubnt and lock the fields."""
+        if self.var_default_creds.get():
+            self.var_user.set("ubnt")
+            self.var_pass.set("ubnt")
+            self.ent_user.configure(state="disabled")
+            self.ent_pass.configure(state="disabled")
+            self.log("Using default credentials (ubnt / ubnt).")
+        else:
+            self.ent_user.configure(state="normal")
+            self.ent_pass.configure(state="normal")
+
+    # ── Find devices (switch to Discovery) ──────────────────
+
+    def _on_find_devices(self):
+        if self.on_find_devices:
+            self.on_find_devices()
+        else:
+            self.log("Discovery tab is not wired up.")
 
     # ── Mode toggle ─────────────────────────────────────────
 

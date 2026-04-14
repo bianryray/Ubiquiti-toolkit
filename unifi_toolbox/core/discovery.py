@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional, Callable
 
 from ..utils import SCAN_PORTS, SCAN_TIMEOUT, LogFn, noop_log
+from .oui import get_mac_for_ip, lookup_vendor
 
 
 def get_local_subnets() -> List[str]:
@@ -53,10 +54,17 @@ def scan_host(host: str, ports: List[int] = None, timeout: float = SCAN_TIMEOUT)
     if not open_ports:
         return None
 
+    # Resolve MAC + vendor from the local ARP cache. Failures are fine --
+    # remote devices or cross-subnet hosts won't have an ARP entry.
+    mac = get_mac_for_ip(host) or ""
+    vendor = lookup_vendor(mac) if mac else ""
+
     return {
         "ip": host,
         "ports": open_ports,
         "banner": banner,
+        "mac": mac,
+        "vendor": vendor,
         "status": "found",
     }
 
@@ -125,10 +133,11 @@ class NetworkScanner:
                     result = future.result()
                     if result:
                         self.results.append(result)
+                        vendor = result.get("vendor") or ""
+                        vendor_hint = f" vendor={vendor}" if vendor else ""
                         self.log(
                             f"  Found: {result['ip']} "
-                            f"ports={result['ports']} "
-                            f"banner={result['banner'][:60]}"
+                            f"ports={result['ports']}{vendor_hint}"
                         )
                         if on_found:
                             on_found(result)
