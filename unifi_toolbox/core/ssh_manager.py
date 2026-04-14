@@ -288,17 +288,6 @@ class SSHManager:
             "unrecognized",
         )
 
-        # Positive wording some firmwares print. We don't require this -- a
-        # clean exit is enough -- but when it's there we log nicer output.
-        positive_markers = (
-            "adoption request sent",
-            "adoption request",
-            "set-inform sent",
-            "informed",
-            "successfully",
-            "success",
-        )
-
         def _attempt(cmd: str) -> Tuple[Optional[bool], str, str, str]:
             if dry_run:
                 self.log(f"[DRY RUN] Would run: {cmd}")
@@ -307,6 +296,15 @@ class SSHManager:
             self.log(f"Running: {cmd}")
             ok, out, err = self.run(cmd)
             record(cmd, ok, out, err)
+            # Echo whatever the device actually replied with so the user
+            # sees the real "Adoption request sent to ..." line instead of a
+            # summary that hides it.
+            if out and out.strip():
+                for line in out.strip().splitlines():
+                    self.log(f"  {line}")
+            if err and err.strip():
+                for line in err.strip().splitlines():
+                    self.log(f"  (stderr) {line}")
             combined = ((out or "") + "\n" + (err or "")).lower()
             return ok, out, err, combined
 
@@ -322,11 +320,10 @@ class SSHManager:
         if ok and not missing:
             results["adopted"] = True
             results["successful_cmd"] = primary
-            if any(m in combined for m in positive_markers):
-                self.log("Adoption command succeeded.")
-            else:
-                self.log("Adoption command sent (exit 0). "
-                         "Check the controller to confirm.")
+            self.log(
+                "[OK] Adopted. Finish the pairing in your UniFi Network "
+                "controller (Devices -> Pending Adoption)."
+            )
             return results
 
         # ---- 2. Only fall back if the binary was missing -------------
@@ -347,7 +344,10 @@ class SSHManager:
         if ok2 and not any(m in combined2 for m in missing_binary_markers):
             results["adopted"] = True
             results["successful_cmd"] = fallback
-            self.log("Adoption command succeeded (via mca-cli).")
+            self.log(
+                "[OK] Adopted via mca-cli. Finish the pairing in your "
+                "UniFi Network controller (Devices -> Pending Adoption)."
+            )
             return results
 
         results["adopted"] = False
