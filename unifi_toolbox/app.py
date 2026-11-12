@@ -1,9 +1,18 @@
 import os
 import queue
+import sys
+import threading
+from datetime import datetime
+from tkinter import filedialog, messagebox
+
 import customtkinter as ctk
 
 from .version import __version__
-from .core.updater import check_for_update_async, open_download_page
+from .core.updater import (
+    check_for_update_async, open_download_page, is_frozen,
+    download_update, staging_path_for, launch_swap_and_restart,
+    cleanup_old_build,
+)
 from .tabs.ssh_tab import SSHTab
 from .tabs.console_tab import ConsoleTab
 from .tabs.discovery_tab import DiscoveryTab
@@ -28,6 +37,20 @@ CLR_BORDER = ("#d0d0dc", "#4a4a5e")
 CLR_GHOST_HOVER = ("#e4e4ec", "#3a3a4e")
 
 
+def _plain_notes(md: str) -> str:
+    """Light markdown cleanup so release notes read well in a plain textbox."""
+    out = []
+    for line in (md or "").strip().splitlines():
+        stripped = line.lstrip("#").strip()
+        if line.startswith("#"):
+            line = stripped.upper()
+        elif line.lstrip().startswith("- "):
+            indent = len(line) - len(line.lstrip())
+            line = " " * indent + "\u2022 " + line.lstrip()[2:]
+        out.append(line.replace("**", "").replace("`", ""))
+    return "\n".join(out)
+
+
 class UniFiToolboxApp(ctk.CTk):
     """Main application window."""
 
@@ -42,9 +65,13 @@ class UniFiToolboxApp(ctk.CTk):
 
         self.log_queue = queue.Queue()
         self._update_info = None
+        self._updating = False
+        cleanup_old_build()
         self._build_ui()
+        self._bind_shortcuts()
         self._poll_log_queue()
-        self._check_updates()
+        # Quiet check on startup; only surfaces if an update exists.
+        self.after(1500, lambda: self._check_updates(manual=False))
 
     def _build_ui(self):
         # ── Header bar ──────────────────────────────────────────
@@ -77,6 +104,15 @@ class UniFiToolboxApp(ctk.CTk):
         self.theme_toggle.set("Dark")
         self.theme_toggle.pack(side="right", pady=14)
 
+        self.btn_check_updates = ctk.CTkButton(
+            right_frame, text="Check for Updates", width=140, height=28,
+            font=("Segoe UI", 12),
+            fg_color="transparent", hover_color="#2a4a6f",
+            border_width=1, border_color="#4a6a8f", text_color="#ffffff",
+            command=lambda: self._check_updates(manual=True),
+        )
+        self.btn_check_updates.pack(side="right", padx=(0, 12), pady=14)
+
         # ── Update banner (hidden by default) ───────────────────
         self.update_banner = ctk.CTkFrame(self, height=40, fg_color=CLR_UPDATE_BG, corner_radius=0)
         self.update_banner_label = ctk.CTkLabel(
@@ -86,7 +122,7 @@ class UniFiToolboxApp(ctk.CTk):
         self.update_banner_label.pack(side="left", padx=20, pady=8)
 
         self.update_btn = ctk.CTkButton(
-            self.update_banner, text="Download Update",
+            self.update_banner, text="Update Now" if is_frozen() else "Download Update",
             font=("Segoe UI", 12, "bold"),
             fg_color=CLR_HIGHLIGHT, hover_color="#c73e54",
             width=140, height=28,
@@ -102,6 +138,15 @@ class UniFiToolboxApp(ctk.CTk):
             command=lambda: self.update_banner.pack_forget(),
         )
         self.update_dismiss.pack(side="right", pady=6)
+
+        self.update_notes_btn = ctk.CTkButton(
+            self.update_banner, text="What's New", width=90, height=28,
+            font=("Segoe UI", 11),
+            fg_color="transparent", hover_color="#2a4a6f",
+            border_width=1, border_color="#4a6a8f",
+            command=self._show_release_notes,
+        )
+        self.update_notes_btn.pack(side="right", padx=(0, 8), pady=6)
         # Banner is hidden until an update is found
 
         # ── Main content ────────────────────────────────────────
@@ -165,13 +210,16 @@ class UniFiToolboxApp(ctk.CTk):
             font=("Segoe UI", 13, "bold"), text_color=CLR_TEXT,
         ).pack(side="left")
 
-        ctk.CTkButton(
-            log_header, text="Clear", width=60, height=26,
-            font=("Segoe UI", 11),
-            fg_color="transparent", hover_color=CLR_GHOST_HOVER,
-            border_width=1, border_color=CLR_BORDER, text_color=CLR_TEXT,
-            command=self._clear_log,
-        ).pack(side="right")
+        for label, cmd in (("Clear", self._clear_log),
+                           ("Save...", self._save_log),
+                           ("Copy", self._copy_log)):
+            ctk.CTkButton(
+                log_header, text=label, width=60, height=26,
+                font=("Segoe UI", 11),
+                fg_color="transparent", hover_color=CLR_GHOST_HOVER,
+                border_width=1, border_color=CLR_BORDER, text_color=CLR_TEXT,
+                command=cmd,
+            ).pack(side="right", padx=(6, 0))
 
         self.log_box = ctk.CTkTextbox(
             log_frame, height=130, wrap="word",
@@ -185,7 +233,8 @@ class UniFiToolboxApp(ctk.CTk):
     # ── Logging ─────────────────────────────────────────────────
 
     def _log(self, text: str):
-        self.log_box.insert("end", text + "\n")
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self.log_box.insert("end", f"[{stamp}] {text}\n")
         self.log_box.see("end")
 
     def log_threadsafe(self, text: str):
@@ -203,6 +252,40 @@ class UniFiToolboxApp(ctk.CTk):
     def _clear_log(self):
         self.log_box.delete("1.0", "end")
 
+    def _copy_log(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.log_box.get("1.0", "end").rstrip())
+        self._log("Log copied to clipboard.")
+
+    def _save_log(self):
+        path = filedialog.asksaveasfilename(
+            title="Save log", defaultextension=".txt",
+            initialfile=f"unifi-toolbox-log-{datetime.now():%Y%m%d-%H%M%S}.txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.log_box.get("1.0", "end"))
+            self._log(f"Log saved to {path}")
+        except OSError as e:
+            self._log(f"Could not save log: {e}")
+
+    # ── Keyboard shortcuts ──────────────────────────────────────
+
+    def _bind_shortcuts(self):
+        tabs = ["  SSH Adoption  ", "  Console / API  ", "  Discovery  ",
+                "  Troubleshoot  ", "  Profiles  "]
+        for i, name in enumerate(tabs, start=1):
+            self.bind_all(f"<Control-Key-{i}>", lambda e, n=name: self.tabview.set(n))
+        self.bind_all("<Control-f>", self._on_find_shortcut)
+        self.bind_all("<Control-l>", lambda e: self._clear_log())
+
+    def _on_find_shortcut(self, _event=None):
+        self.tabview.set("  Discovery  ")
+        self.discovery_tab.focus_search()
+
     # ── Theme ───────────────────────────────────────────────────
 
     def _on_theme_change(self, value):
@@ -210,30 +293,114 @@ class UniFiToolboxApp(ctk.CTk):
 
     # ── Auto-update ─────────────────────────────────────────────
 
-    def _check_updates(self):
+    def _check_updates(self, manual: bool):
+        if manual:
+            self.btn_check_updates.configure(state="disabled", text="Checking...")
+            self._log("Checking GitHub for updates...")
+
         def on_result(info):
-            if info:
-                self._update_info = info
-                self.after(0, self._show_update_banner)
+            self.after(0, lambda: self._on_update_result(info, manual))
 
         check_for_update_async(on_result)
+
+    def _on_update_result(self, info, manual: bool):
+        self.btn_check_updates.configure(state="normal", text="Check for Updates")
+        if info.available:
+            self._update_info = info
+            self._log(info.message)
+            self._show_update_banner()
+        elif manual:
+            self._log(info.message)
+            if info.status == "current":
+                messagebox.showinfo("UniFi Toolbox", info.message)
+            else:
+                messagebox.showwarning("Update check", info.message)
 
     def _show_update_banner(self):
         if not self._update_info:
             return
-        ver = self._update_info["version"]
-        self.update_banner_label.configure(
-            text=f"A new version is available: v{ver}  (you have v{__version__})"
-        )
+        self.update_banner_label.configure(text=self._update_info.message)
+        self.update_btn.configure(state="normal")
         # Insert banner right after header
         self.update_banner.pack(fill="x", after=self.winfo_children()[0])
 
+    def _show_release_notes(self):
+        info = self._update_info
+        if not info:
+            return
+        win = ctk.CTkToplevel(self)
+        win.title(f"What's new in v{info.version}")
+        win.geometry("620x460")
+        win.transient(self)
+        box = ctk.CTkTextbox(win, wrap="word", font=("Segoe UI", 12))
+        box.pack(fill="both", expand=True, padx=12, pady=(12, 6))
+        box.insert("1.0", _plain_notes(info.body) or "No release notes were published.")
+        box.configure(state="disabled")
+        ctk.CTkButton(
+            win, text="Open release page",
+            command=lambda: open_download_page(info.url),
+        ).pack(pady=(0, 12))
+        win.after(100, win.lift)
+
     def _on_download_update(self):
-        if self._update_info:
-            url = self._update_info.get("download_url") or self._update_info.get("url", "")
-            if url:
-                open_download_page(url)
-                self._log(f"Opening download page for v{self._update_info['version']}...")
+        info = self._update_info
+        if not info or self._updating:
+            return
+        # Running from source, or the release has no .exe attached:
+        # send the user to the release page instead.
+        if not is_frozen() or not info.download_url:
+            open_download_page(info.download_url or info.url)
+            self._log(f"Opening download page for v{info.version}...")
+            return
+
+        current_exe = os.path.abspath(sys.executable)
+        dest = staging_path_for(current_exe)
+        self._updating = True
+        self.update_btn.configure(state="disabled", text="Downloading...")
+        self._log(f"Downloading v{info.version} ...")
+
+        def progress(done, total):
+            if total:
+                pct = int(done * 100 / total)
+                self.after(0, lambda: self.update_btn.configure(text=f"Downloading {pct}%"))
+
+        def worker():
+            try:
+                download_update(info.download_url, dest, on_progress=progress)
+            except Exception as e:
+                err = str(e)  # `e` is cleared when the except block ends
+                self.after(0, lambda: self._on_update_failed(err))
+                return
+            self.after(0, lambda: self._finish_update(dest, current_exe))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_update_failed(self, err: str):
+        self._updating = False
+        self.update_btn.configure(state="normal", text="Update Now")
+        self._log(f"Update failed: {err}")
+        messagebox.showerror(
+            "Update failed",
+            f"{err}\n\nYou can download the new version manually from the release page.",
+        )
+
+    def _finish_update(self, new_exe: str, current_exe: str):
+        self._log("Download complete. Restarting to finish the update...")
+        if not messagebox.askokcancel(
+            "Install update",
+            f"UniFi Toolbox v{self._update_info.version} is ready.\n\n"
+            "The app will close, update itself and reopen. Continue?",
+        ):
+            self._updating = False
+            self.update_btn.configure(state="normal", text="Update Now")
+            self._log(f"Update postponed. Downloaded file kept at {new_exe}")
+            return
+        try:
+            launch_swap_and_restart(new_exe, current_exe)
+        except Exception as e:
+            self._on_update_failed(f"Could not start the installer step: {e}")
+            return
+        self.after(200, self.destroy)
 
     # ── Profile integration ─────────────────────────────────────
 

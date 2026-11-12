@@ -28,6 +28,13 @@ Built with Python and [CustomTkinter](https://github.com/TomSchimansky/CustomTki
 - Auto-detects your local subnet
 - Concurrent scanning (50 threads) for speed
 - Results table with checkboxes — select devices and send them directly to SSH batch adoption
+- **Search** by MAC, IP, manufacturer, port or banner (MAC search ignores `:` / `-`; Ctrl+F)
+- **Sort** by any column (click the header; click again to reverse)
+- Right-click a row to copy IP/MAC, open its web UI or adopt it; Copy IPs / Copy MACs / Export CSV for selected rows
+
+### Updates
+- Checks GitHub Releases on startup and via **Check for Updates**
+- **Update Now** downloads the new `.exe`, closes, replaces itself and reopens — no git needed on the PC
 
 ### Connection Profiles
 - Save and load connection profiles (controller URL, SSH credentials, console credentials, SSH options)
@@ -106,6 +113,16 @@ unifi-toolbox/
 │       ├── discovery_tab.py      # Network discovery tab
 │       └── profiles_tab.py       # Profile management tab
 ```
+
+## Releasing an Update
+
+1. Bump `__version__` in `unifi_toolbox/version.py` and add a matching
+   `## [x.y.z]` section to `CHANGELOG.md` (used as the release notes).
+2. Merge to `main`. The **Build & Release** GitHub Action builds the `.exe` on
+   Windows and publishes release `vx.y.z` with `UniFi-Toolbox.exe` attached.
+   It can also be run by hand from the repo's **Actions** tab.
+3. Installed copies see the update banner next time they start (or when
+   **Check for Updates** is clicked) and can install it with **Update Now**.
 
 ## Usage Tips
 

@@ -4,6 +4,38 @@ All notable changes to UniFi Toolbox are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] - 2026-11-12
+
+### Added
+- **Updates without git** — every version bump merged to `main` now builds the
+  `.exe` on GitHub and publishes it as a Release automatically
+- **Check for Updates** button in the header (tells you if you're current)
+- **Update Now** — the packaged `.exe` downloads the new version, closes,
+  swaps itself and reopens. No browser or manual file copying needed
+- **What's New** button on the update banner shows the release notes
+- **Discovery: search box** — filter by MAC, IP, manufacturer, port or banner.
+  MAC search ignores separators (`aabbcc`, `aa:bb:cc`, `AA-BB-CC` all match).
+  Several words narrow the results further (e.g. `ubiquiti 8080`). Ctrl+F jumps to it
+- **Discovery: sortable columns** — click IP, MAC, Manufacturer, Ports or Banner
+  to sort; click again to reverse. IPs sort numerically (.9 before .100)
+- **Discovery: right-click a row** — copy IP / MAC, open the web UI, adopt just that device
+- **Discovery: Copy IPs / Copy MACs / Export CSV** for the selected rows
+- Discovery progress bar, "Showing X of Y" counter and an end-of-scan summary
+- Log panel: timestamps, **Copy** and **Save...** buttons
+- Keyboard shortcuts: Ctrl+1..5 switch tabs, Ctrl+F search devices, Ctrl+L clear log
+
+### Changed
+- Discovery results are sorted by IP by default instead of arrival order
+- Select All / Deselect All / Adopt Selected act on the rows currently shown,
+  so a search or "Only Ubiquiti" filter is respected
+- Stop button is only enabled while a scan is running
+- Subnet field is a dropdown of the PC's detected subnets (still editable); Enter starts a scan
+
+### Fixed (since 1.1.0)
+- Adoption now runs `set-inform` in a real interactive shell, so it resolves
+  like a manual SSH session (fixes "command not found" on some devices)
+- Device's `set-inform` reply is echoed to the log for clearer results
+
 ## [1.0.0] - 2026-02-26
 
 ### Added
