@@ -82,9 +82,27 @@ def page_header(parent, title: str, subtitle: str = ""):
     ctk.CTkLabel(wrap, text=title, font=FONT_PAGE_TITLE, text_color=TEXT,
                  anchor="w").pack(fill="x")
     if subtitle:
-        ctk.CTkLabel(wrap, text=subtitle, font=FONT_LABEL, text_color=TEXT_DIM,
-                     anchor="w", justify="left").pack(fill="x", pady=(2, 0))
+        autowrap(ctk.CTkLabel(wrap, text=subtitle, font=FONT_LABEL, text_color=TEXT_DIM,
+                              anchor="w", justify="left")).pack(fill="x", pady=(2, 0))
     return wrap
+
+
+def autowrap(lbl, margin: int = 8):
+    """Make a label re-wrap its text to the width of its container.
+
+    Watches the parent, not the label: the label's own width depends on its
+    wrap length, so reacting to it would shrink it in a feedback loop.
+    """
+    parent = lbl.master
+    state = {"w": 0}
+
+    def on_resize(event):
+        width = max(event.width - margin, 100)
+        if abs(width - state["w"]) > 2:
+            state["w"] = width
+            lbl.configure(wraplength=width)
+    parent.bind("<Configure>", on_resize, add="+")
+    return lbl
 
 
 def card(parent, title: str = "", subtitle: str = "", *, expand: bool = False,
@@ -106,8 +124,8 @@ def card(parent, title: str = "", subtitle: str = "", *, expand: bool = False,
         ctk.CTkLabel(text_col, text=title, font=FONT_HEADING, text_color=TEXT,
                      anchor="w").pack(fill="x")
         if subtitle:
-            ctk.CTkLabel(text_col, text=subtitle, font=FONT_SMALL, text_color=TEXT_DIM,
-                         anchor="w", justify="left").pack(fill="x")
+            autowrap(ctk.CTkLabel(text_col, text=subtitle, font=FONT_SMALL, text_color=TEXT_DIM,
+                                  anchor="w", justify="left")).pack(fill="x")
         if actions:  # an empty CTkFrame would keep its default 200px height
             right = ctk.CTkFrame(head, fg_color="transparent")
             right.pack(side="right")

@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [1.2.0] - 2026-11-13
 
 ### Added
+- **Network Tests (Beta)** page:
+  - **Area Check** — run on the AP serving a slow area; checks latency/loss
+    to the gateway and the internet, DNS, the AP's uplink (cable link speed
+    or mesh signal), Wi-Fi channel utilisation, client signal and CPU, then
+    names the most likely cause in plain words
+  - **AP ↔ Gateway speed** — iperf3 between two UniFi devices, both ways
+  - **PC ↔ Device speed** — the app listens; the device streams to/from it
+    with its built-in `nc`, so nothing is installed on the device
+  - **PC ↔ PC speed** — two copies of UniFi Toolbox, one listening
+  - Throughput matched iperf3 within ~3% in testing on a 200 Mbps link
 - **Redesigned interface** — sidebar navigation, card-based pages with clear
   section titles, consistent modern buttons/inputs, and a proper Light mode
   (every page now follows the Light / Dark / System setting)

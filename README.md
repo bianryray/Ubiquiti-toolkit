@@ -32,6 +32,15 @@ Built with Python and [CustomTkinter](https://github.com/TomSchimansky/CustomTki
 - **Sort** by any column (click the header; click again to reverse)
 - Right-click a row to copy IP/MAC, open its web UI or adopt it; Copy IPs / Copy MACs / Export CSV for selected rows
 
+### Network Tests (Beta)
+- **Area Check** — run on the AP that serves a slow area; it checks the AP's link to the
+  gateway, the internet, DNS, the AP's uplink (cable speed / mesh signal), Wi-Fi channel
+  congestion, client signal and load, then says which is the likely cause
+- **AP ↔ Gateway**, **PC ↔ Device** and **PC ↔ PC** throughput tests (both directions)
+- PC tests listen on TCP port 50555 by default — allow UniFi Toolbox through Windows
+  Firewall (Private networks) when prompted
+- AP/switch CPUs can limit PC ↔ Device results; AP ↔ Gateway needs `iperf3` on both devices
+
 ### Manufacturer identification
 - Full IEEE MAC registry (~54,000 prefixes) bundled and refreshed with every release
 - **Update manufacturer list** in Discovery downloads the latest copy on demand
@@ -118,6 +127,7 @@ unifi-toolbox/
 │   │   ├── ssh_manager.py        # SSH connection & command execution
 │   │   ├── api_client.py         # UniFi OS REST API wrapper
 │   │   ├── discovery.py          # Network port scanner
+│   │   ├── nettest.py            # Area check + speed tests (beta)
 │   │   ├── oui.py                # MAC lookup, manufacturer + hostname resolution
 │   │   ├── oui_sources.py        # Download / parse the IEEE registry
 │   │   ├── profiles.py           # JSON profile + settings storage
@@ -128,7 +138,8 @@ unifi-toolbox/
 │       ├── console_tab.py        # Console / API management
 │       ├── discovery_tab.py      # Network discovery
 │       ├── troubleshoot_tab.py   # One-click diagnostics
-│       └── profiles_tab.py       # Profile management
+│       ├── profiles_tab.py       # Profile management
+│       └── nettest_tab.py        # Network Tests page (beta)
 ```
 
 ## Releasing an Update

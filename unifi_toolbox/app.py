@@ -21,15 +21,18 @@ from .tabs.console_tab import ConsoleTab
 from .tabs.discovery_tab import DiscoveryTab
 from .tabs.troubleshoot_tab import TroubleshootTab
 from .tabs.profiles_tab import ProfilesTab
+from .tabs.nettest_tab import NetTestTab
 
 # (key, label, Segoe Fluent/MDL2 icon codepoint)
 PAGES = [
-    ("ssh", "SSH Adoption", ""),         # CommandPrompt
-    ("console", "Console / API", ""),    # Globe
-    ("discovery", "Discovery", ""),      # Search
-    ("troubleshoot", "Troubleshoot", ""),  # Repair
-    ("profiles", "Profiles", ""),        # Contact
+    ("ssh", "SSH Adoption", "\ue756"),           # CommandPrompt
+    ("console", "Console / API", "\ue774"),      # Globe
+    ("discovery", "Discovery", "\ue721"),        # Search
+    ("troubleshoot", "Troubleshoot", "\ue90f"),  # Repair
+    ("profiles", "Profiles", "\ue77b"),          # Contact
+    ("nettest", "Network Tests", "\ue9d9"),      # Diagnostic (BETA section)
 ]
+BETA_PAGES = {"nettest"}
 
 # Log line colouring: (regex, (light, dark))
 _LOG_RULES = [
@@ -151,7 +154,12 @@ class UniFiToolboxApp(ctk.CTk):
 
         ctk.CTkLabel(side, text="TOOLS", font=T.FONT_SMALL_BOLD, text_color=T.TEXT_FAINT,
                      anchor="w").pack(fill="x", padx=22, pady=(0, 6))
+        beta_label_done = False
         for key, label, icon in PAGES:
+            if key in BETA_PAGES and not beta_label_done:
+                ctk.CTkLabel(side, text="BETA", font=T.FONT_SMALL_BOLD, text_color=T.WARNING,
+                             anchor="w").pack(fill="x", padx=22, pady=(18, 6))
+                beta_label_done = True
             item = NavItem(side, label, icon, self._icon_font,
                            command=lambda k=key: self.show_page(k))
             item.pack(fill="x", padx=12, pady=2)
@@ -216,10 +224,16 @@ class UniFiToolboxApp(ctk.CTk):
         self.profiles_tab = ProfilesTab(host(), log_fn=self.log_threadsafe,
                                         get_fields_fn=self._get_all_fields,
                                         load_fields_fn=self._load_all_fields)
+        self.nettest_tab = NetTestTab(
+            host(), log_fn=self.log_threadsafe,
+            get_ssh_login=lambda: (self.ssh_tab.var_user.get(), self.ssh_tab.var_pass.get(),
+                                   self.ssh_tab._get_port()),
+        )
         for key, tab in (("ssh", self.ssh_tab), ("console", self.console_tab),
                          ("discovery", self.discovery_tab),
                          ("troubleshoot", self.troubleshoot_tab),
-                         ("profiles", self.profiles_tab)):
+                         ("profiles", self.profiles_tab),
+                         ("nettest", self.nettest_tab)):
             tab.pack(fill="both", expand=True)
             self.pages[key] = tab.master
         self.show_page("ssh")
