@@ -1,4 +1,5 @@
 import threading
+from tkinter import messagebox
 from typing import Optional
 
 import customtkinter as ctk
@@ -6,31 +7,9 @@ import customtkinter as ctk
 from ..core.ssh_manager import SSHManager
 from ..core.tasks import AdoptionTask, BatchAdoptionTask, ResetTask
 from ..utils import DEFAULT_SSH_PORT, SSHOptions, parse_ip_targets, LogFn
+from .. import theme as T
 
-# Shared palette
-_CARD = "#2a2a3e"
-_ACCENT = "#0f3460"
-_GREEN = "#00b894"
-_GREEN_HOVER = "#00a381"
-_RED = "#e94560"
-_RED_HOVER = "#c73e54"
-_DIM = "#8a8a9a"
-_LABEL_FONT = ("Segoe UI", 12)
-_HEADING_FONT = ("Segoe UI", 13, "bold")
-_ENTRY_W = 260
-
-
-def _section(parent, title: str) -> ctk.CTkFrame:
-    """Create a styled section card with a heading."""
-    card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
-    card.pack(fill="x", padx=4, pady=(0, 8))
-    ctk.CTkLabel(
-        card, text=title, font=_HEADING_FONT,
-        text_color="#ffffff", anchor="w",
-    ).pack(fill="x", padx=14, pady=(10, 2))
-    sep = ctk.CTkFrame(card, height=1, fg_color="#3a3a4e")
-    sep.pack(fill="x", padx=14, pady=(0, 8))
-    return card
+_MODES = {"Single device": "single", "Batch": "batch"}
 
 
 class SSHTab(ctk.CTkFrame):
@@ -44,224 +23,126 @@ class SSHTab(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
+        page = T.scroll_page(self)
+        T.page_header(
+            page, "SSH Adoption",
+            "Point devices at your controller over SSH - one device or a whole batch.",
+        )
 
-        # ── Mode toggle ──────────────────────────────────────
-        mode_card = _section(scroll, "Mode")
-        mode_row = ctk.CTkFrame(mode_card, fg_color="transparent")
-        mode_row.pack(fill="x", padx=14, pady=(0, 10))
-
+        # ── Target ───────────────────────────────────────────
+        target, target_actions = T.card(
+            page, "Target", "Which device(s) to connect to", actions=True)
         self.mode_var = ctk.StringVar(value="single")
-        ctk.CTkRadioButton(
-            mode_row, text="Single Device", variable=self.mode_var,
-            value="single", command=self._on_mode_change,
-            font=_LABEL_FONT, radiobutton_width=18, radiobutton_height=18,
-        ).pack(side="left", padx=(0, 24))
-        ctk.CTkRadioButton(
-            mode_row, text="Batch", variable=self.mode_var,
-            value="batch", command=self._on_mode_change,
-            font=_LABEL_FONT, radiobutton_width=18, radiobutton_height=18,
-        ).pack(side="left")
+        self._mode_label = ctk.StringVar(value="Single device")
+        T.segmented(
+            target_actions, list(_MODES), var=self._mode_label,
+            command=lambda v: (self.mode_var.set(_MODES[v]), self._on_mode_change()),
+            width=220,
+        ).pack(side="right")
 
-        # ── Connection ───────────────────────────────────────
-        conn_card = _section(scroll, "Connection")
-        grid = ctk.CTkFrame(conn_card, fg_color="transparent")
-        grid.pack(fill="x", padx=14, pady=(0, 10))
-        grid.columnconfigure(1, weight=1)
-
-        r = 0
-        # Single IP
-        self.lbl_ip = ctk.CTkLabel(grid, text="Device IP", font=_LABEL_FONT, anchor="e")
-        self.lbl_ip.grid(row=r, column=0, sticky="e", padx=(0, 10), pady=4)
+        grid = ctk.CTkFrame(target, fg_color="transparent")
+        grid.pack(fill="x")
         self.var_ip = ctk.StringVar()
-        self.ent_ip = ctk.CTkEntry(grid, textvariable=self.var_ip, width=_ENTRY_W, height=32)
-        self.ent_ip.grid(row=r, column=1, sticky="w", pady=4)
 
-        # Quick link to the Discovery tab so you don't have to leave Connection
-        self.btn_find = ctk.CTkButton(
-            grid, text="Find on network", command=self._on_find_devices,
-            width=130, height=32, font=("Segoe UI", 11),
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
-        )
-        self.btn_find.grid(row=r, column=2, sticky="w", padx=(10, 0), pady=4)
+        def ip_and_find(cell):
+            box = ctk.CTkFrame(cell, fg_color="transparent")
+            self.ent_ip = T.entry(box, self.var_ip, width=240)
+            self.ent_ip.pack(side="left")
+            self.btn_find = T.button(box, "Find on network", self._on_find_devices,
+                                     kind="secondary")
+            self.btn_find.pack(side="left", padx=(8, 0))
+            return box
 
-        # Batch targets (hidden by default)
-        self.lbl_batch = ctk.CTkLabel(grid, text="Targets", font=_LABEL_FONT, anchor="e")
+        self.cell_ip = T.field(grid, 0, 0, "DEVICE IP", ip_and_find)
+
         self.var_batch = ctk.StringVar()
-        self.ent_batch = ctk.CTkEntry(
-            grid, textvariable=self.var_batch, width=420, height=32,
-            placeholder_text="IPs, range (1.1.1.1-50), or CIDR (1.1.1.0/24)",
+        self.cell_batch = T.field(
+            grid, 0, 0, "TARGETS",
+            lambda c: T.entry(c, self.var_batch, width=520),
+            hint="Comma separated IPs, a range (192.168.1.10-50) or CIDR (192.168.1.0/24)",
         )
-        self.lbl_batch_hint = ctk.CTkLabel(
-            grid, text="Comma/newline separated, range, or CIDR",
-            font=("Segoe UI", 11), text_color=_DIM,
-        )
+        self.ent_batch = self.cell_batch.input
 
-        r = 3
-        ctk.CTkLabel(grid, text="Username", font=_LABEL_FONT, anchor="e").grid(
-            row=r, column=0, sticky="e", padx=(0, 10), pady=4)
+        # ── Credentials ──────────────────────────────────────
+        creds = T.card(page, "Credentials", "Factory-fresh devices use ubnt / ubnt")
+        cgrid = ctk.CTkFrame(creds, fg_color="transparent")
+        cgrid.pack(fill="x")
         self.var_user = ctk.StringVar(value="ubnt")
-        self.ent_user = ctk.CTkEntry(grid, textvariable=self.var_user, width=_ENTRY_W, height=32)
-        self.ent_user.grid(row=r, column=1, sticky="w", pady=4)
-
-        r = 4
-        ctk.CTkLabel(grid, text="Password", font=_LABEL_FONT, anchor="e").grid(
-            row=r, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_pass = ctk.StringVar()
-        self.ent_pass = ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=_ENTRY_W, height=32)
-        self.ent_pass.grid(row=r, column=1, sticky="w", pady=4)
-
-        # Default credentials toggle: auto-fill + lock user/pass to ubnt/ubnt
-        self.var_default_creds = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            grid, text="Use default ubnt / ubnt (factory-fresh devices)",
-            variable=self.var_default_creds, command=self._on_toggle_default_creds,
-            font=("Segoe UI", 11), checkbox_width=18, checkbox_height=18,
-        ).grid(row=r, column=2, sticky="w", padx=(16, 0), pady=4)
-
-        r = 5
-        ctk.CTkLabel(grid, text="Controller URL", font=_LABEL_FONT, anchor="e").grid(
-            row=r, column=0, sticky="e", padx=(0, 10), pady=4)
-        self.var_ctrl = ctk.StringVar()
-        ctk.CTkEntry(
-            grid, textvariable=self.var_ctrl, width=340, height=32,
-            placeholder_text="http://192.168.1.1:8080",
-        ).grid(row=r, column=1, sticky="w", pady=4)
-        # Inline hint so users know exactly what to type and don't paste
-        # the full `set-inform` command, the /inform path, https, or
-        # the wrong port.
-        ctk.CTkLabel(
-            grid,
-            text="e.g. http://192.168.1.1:8080  (no /inform, no https, no 8443)",
-            font=("Segoe UI", 11), text_color=_DIM, anchor="w",
-        ).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=4)
-
-        r = 6
-        ctk.CTkLabel(grid, text="SSH Port", font=_LABEL_FONT, anchor="e").grid(
-            row=r, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_port = ctk.StringVar(value=str(DEFAULT_SSH_PORT))
-        ctk.CTkEntry(grid, textvariable=self.var_port, width=80, height=32).grid(
-            row=r, column=1, sticky="w", pady=4)
+        self.ent_user = T.field(cgrid, 0, 0, "USERNAME",
+                                lambda c: T.entry(c, self.var_user, width=200)).input
+        self.ent_pass = T.field(cgrid, 0, 1, "PASSWORD",
+                                lambda c: T.entry(c, self.var_pass, width=200, show="\u2022")).input
+        T.field(cgrid, 0, 2, "SSH PORT", lambda c: T.entry(c, self.var_port, width=80))
+        self.var_default_creds = ctk.BooleanVar(value=False)
+        T.switch(creds, "Use default ubnt / ubnt", self.var_default_creds,
+                 self._on_toggle_default_creds).pack(anchor="w")
 
-        r = 7
+        # ── Controller ───────────────────────────────────────
+        ctrl = T.card(page, "Controller", "Where adopted devices should report in")
+        self.var_ctrl = ctk.StringVar()
+        cg = ctk.CTkFrame(ctrl, fg_color="transparent")
+        cg.pack(fill="x")
+        T.field(
+            cg, 0, 0, "CONTROLLER URL",
+            lambda c: T.entry(c, self.var_ctrl, width=360),
+            hint="e.g. http://192.168.1.1:8080  -  no /inform, no https, no 8443",
+        )
         self.var_dry = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            grid, text="Dry run (don't execute)", variable=self.var_dry,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).grid(row=r, column=1, sticky="w", pady=4)
+        T.switch(ctrl, "Dry run - show the commands without running them",
+                 self.var_dry).pack(anchor="w")
 
-        # ── SSH Options ──────────────────────────────────────
-        opts_card = _section(scroll, "SSH Options")
-        opts = ctk.CTkFrame(opts_card, fg_color="transparent")
-        opts.pack(fill="x", padx=14, pady=(0, 10))
-
-        row1 = ctk.CTkFrame(opts, fg_color="transparent")
-        row1.pack(fill="x", pady=2)
-        self.var_accept_key = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            row1, text="Auto-accept host keys", variable=self.var_accept_key,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).pack(side="left", padx=(0, 30))
-        self.var_try_kbd = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            row1, text="Try keyboard-interactive auth", variable=self.var_try_kbd,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).pack(side="left")
-
-        row2 = ctk.CTkFrame(opts, fg_color="transparent")
-        row2.pack(fill="x", pady=(6, 2))
-        self.var_use_pkey = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            row2, text="Use SSH private key", variable=self.var_use_pkey,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).pack(side="left")
-
-        key_row = ctk.CTkFrame(opts, fg_color="transparent")
-        key_row.pack(fill="x", pady=2)
-        ctk.CTkLabel(key_row, text="Key file", font=_LABEL_FONT).pack(side="left", padx=(20, 10))
-        self.var_pkey_path = ctk.StringVar()
-        ctk.CTkEntry(key_row, textvariable=self.var_pkey_path, width=280, height=32).pack(side="left")
-        ctk.CTkLabel(key_row, text="Passphrase", font=_LABEL_FONT).pack(side="left", padx=(20, 10))
-        self.var_pkey_pw = ctk.StringVar()
-        ctk.CTkEntry(key_row, textvariable=self.var_pkey_pw, show="*", width=200, height=32).pack(side="left")
-
-        # ── Actions ──────────────────────────────────────────
-        actions_card = _section(scroll, "Actions")
-        btn_row = ctk.CTkFrame(actions_card, fg_color="transparent")
-        btn_row.pack(fill="x", padx=14, pady=(0, 10))
-
-        self.btn_detect = ctk.CTkButton(
-            btn_row, text="Detect Model", command=self._on_detect,
-            width=130, height=34, font=_LABEL_FONT,
-            fg_color=_ACCENT, hover_color="#1a4a70",
-        )
-        self.btn_detect.pack(side="left", padx=(0, 8))
-
-        self.btn_adopt = ctk.CTkButton(
-            btn_row, text="Run Adoption", command=self._on_adopt,
-            width=140, height=34, font=("Segoe UI", 12, "bold"),
-            fg_color=_GREEN, hover_color=_GREEN_HOVER, text_color="#1a1a2e",
-        )
+        # ── Run ──────────────────────────────────────────────
+        run = T.card(page, "Run")
+        btn_row = T.row(run)
+        self.btn_adopt = T.button(btn_row, "Run Adoption", self._on_adopt,
+                                  kind="success", width=170)
         self.btn_adopt.pack(side="left", padx=(0, 8))
-
-        self.btn_pause = ctk.CTkButton(
-            btn_row, text="Pause", command=self._on_pause,
-            width=80, height=34, font=_LABEL_FONT,
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
-        )
+        self.btn_detect = T.button(btn_row, "Detect Model", self._on_detect)
+        self.btn_detect.pack(side="left", padx=(0, 8))
+        self.btn_pause = T.button(btn_row, "Pause", self._on_pause, width=90)
         self.btn_pause.pack(side="left", padx=(0, 8))
-
-        self.btn_stop = ctk.CTkButton(
-            btn_row, text="Stop", command=self._on_stop,
-            width=80, height=34, font=_LABEL_FONT,
-            fg_color=_RED, hover_color=_RED_HOVER,
-        )
+        self.btn_stop = T.button(btn_row, "Stop", self._on_stop,
+                                 kind="danger-outline", width=90)
         self.btn_stop.pack(side="left")
 
-        # ── Quick command ────────────────────────────────────
-        quick_card = _section(scroll, "Quick SSH Command")
-        quick_row = ctk.CTkFrame(quick_card, fg_color="transparent")
-        quick_row.pack(fill="x", padx=14, pady=(0, 10))
+        # ── SSH options ──────────────────────────────────────
+        opts = T.card(page, "SSH Options", "Advanced - the defaults suit most devices")
+        o1 = T.row(opts, pady=(0, 10))
+        self.var_accept_key = ctk.BooleanVar(value=True)
+        T.checkbox(o1, "Auto-accept host keys", self.var_accept_key).pack(side="left", padx=(0, 28))
+        self.var_try_kbd = ctk.BooleanVar(value=True)
+        T.checkbox(o1, "Try keyboard-interactive auth", self.var_try_kbd).pack(side="left", padx=(0, 28))
+        self.var_use_pkey = ctk.BooleanVar(value=False)
+        T.checkbox(o1, "Use SSH private key", self.var_use_pkey).pack(side="left")
+        kgrid = ctk.CTkFrame(opts, fg_color="transparent")
+        kgrid.pack(fill="x")
+        self.var_pkey_path = ctk.StringVar()
+        self.var_pkey_pw = ctk.StringVar()
+        T.field(kgrid, 0, 0, "KEY FILE", lambda c: T.entry(c, self.var_pkey_path, width=320))
+        T.field(kgrid, 0, 1, "PASSPHRASE",
+                lambda c: T.entry(c, self.var_pkey_pw, width=200, show="\u2022"))
 
+        # ── Quick command ────────────────────────────────────
+        quick = T.card(page, "Quick SSH Command", "Run one command on the device above")
+        q = T.row(quick)
         self.var_quick_cmd = ctk.StringVar(value="info")
-        ctk.CTkEntry(
-            quick_row, textvariable=self.var_quick_cmd,
-            width=400, height=32,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            quick_row, text="Run", command=self._on_quick_cmd,
-            width=60, height=32, font=_LABEL_FONT,
-            fg_color=_ACCENT, hover_color="#1a4a70",
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            quick_row, text="Test SSH", command=self._on_test_ssh,
-            width=90, height=32, font=_LABEL_FONT,
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
-        ).pack(side="left")
+        qe = T.entry(q, self.var_quick_cmd, width=420, mono=True)
+        qe.pack(side="left", padx=(0, 8))
+        qe.bind("<Return>", lambda e: self._on_quick_cmd())
+        T.button(q, "Run", self._on_quick_cmd, kind="primary", width=80).pack(side="left", padx=(0, 8))
+        T.button(q, "Test SSH", self._on_test_ssh).pack(side="left")
 
         # ── Factory reset ────────────────────────────────────
-        reset_card = _section(scroll, "Factory Reset")
-        reset_row = ctk.CTkFrame(reset_card, fg_color="transparent")
-        reset_row.pack(fill="x", padx=14, pady=(0, 10))
+        reset = T.card(page, "Factory Reset",
+                       "Wipes the device's configuration. You'll be asked to confirm.")
+        r = T.row(reset)
+        T.button(r, "syswrapper.sh restore-default", self._on_reset_sys,
+                 kind="danger-outline").pack(side="left", padx=(0, 8))
+        T.button(r, "set-default", self._on_reset_set,
+                 kind="danger-outline", width=120).pack(side="left")
 
-        ctk.CTkButton(
-            reset_row, text="syswrapper.sh restore-default",
-            command=self._on_reset_sys,
-            width=250, height=34, font=_LABEL_FONT,
-            fg_color=_RED, hover_color=_RED_HOVER,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            reset_row, text="set-default",
-            command=self._on_reset_set,
-            width=120, height=34, font=_LABEL_FONT,
-            fg_color=_RED, hover_color=_RED_HOVER,
-        ).pack(side="left")
-
-        # Initial mode state
         self._on_mode_change()
 
     # ── Default credentials lock ────────────────────────────
@@ -290,23 +171,16 @@ class SSHTab(ctk.CTkFrame):
 
     def _on_mode_change(self):
         is_batch = self.mode_var.get() == "batch"
+        self._mode_label.set("Batch" if is_batch else "Single device")
         if is_batch:
-            self.lbl_ip.grid_remove()
-            self.ent_ip.grid_remove()
             # In batch mode the user already has IPs (often from Discovery),
-            # so the per-device "Find on network" shortcut is just clutter.
-            self.btn_find.grid_remove()
-            self.lbl_batch.grid(row=0, column=0, sticky="ne", padx=(0, 10), pady=4)
-            self.ent_batch.grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
-            self.lbl_batch_hint.grid(row=1, column=1, columnspan=2, sticky="w")
+            # so the single-device field and "Find on network" are clutter.
+            self.cell_ip.grid_remove()
+            self.cell_batch.grid()
             self.btn_adopt.configure(text="Run Batch Adoption")
         else:
-            self.lbl_batch.grid_remove()
-            self.ent_batch.grid_remove()
-            self.lbl_batch_hint.grid_remove()
-            self.lbl_ip.grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
-            self.ent_ip.grid(row=0, column=1, sticky="w", pady=4)
-            self.btn_find.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
+            self.cell_batch.grid_remove()
+            self.cell_ip.grid()
             self.btn_adopt.configure(text="Run Adoption")
 
     # ── Helpers ──────────────────────────────────────────────
@@ -441,6 +315,8 @@ class SSHTab(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_reset_sys(self):
+        if not self._confirm_reset():
+            return
         try:
             ssh = self._make_ssh()
         except Exception as e:
@@ -452,6 +328,8 @@ class SSHTab(ctk.CTkFrame):
         task.start()
 
     def _on_reset_set(self):
+        if not self._confirm_reset():
+            return
         try:
             ssh = self._make_ssh()
         except Exception as e:
@@ -461,6 +339,15 @@ class SSHTab(ctk.CTkFrame):
         task = ResetTask(ssh, which="set-default", log=self.log)
         self.current_task = task
         task.start()
+
+    def _confirm_reset(self) -> bool:
+        target = self.var_ip.get().strip() or "(no IP entered)"
+        return messagebox.askyesno(
+            "Factory reset",
+            f"Factory-reset {target}?\n\nThis erases its configuration and "
+            "it will need to be adopted again.",
+            icon="warning",
+        )
 
     # ── Profile integration ──────────────────────────────────
 

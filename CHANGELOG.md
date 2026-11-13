@@ -4,9 +4,24 @@ All notable changes to UniFi Toolbox are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.2.0] - 2026-11-12
+## [1.2.0] - 2026-11-13
 
 ### Added
+- **Redesigned interface** — sidebar navigation, card-based pages with clear
+  section titles, consistent modern buttons/inputs, and a proper Light mode
+  (every page now follows the Light / Dark / System setting)
+- **Full manufacturer database** — the official IEEE registry (~54,000 MAC
+  prefixes incl. MA-M/MA-S blocks) replaces the ~150-entry hand-made list
+- **Update manufacturer list** button in Discovery downloads the latest IEEE
+  registry; each release build also refreshes it automatically
+- Phones/laptops using private (randomized) Wi-Fi MACs are labelled as such
+  instead of "Unknown"; QEMU/KVM virtual NICs are recognised
+- **Hostname column** in Discovery (reverse DNS / NetBIOS name), searchable and sortable
+- Colour-coded activity log (errors red, successes green, warnings amber);
+  click "Activity" to collapse it to a one-line status bar
+- Remembers appearance, window size/position and log state between launches
+- Confirmation before factory resets and before deleting a profile
+- Enter runs the Quick SSH / custom troubleshooting command
 - **Updates without git** — every version bump merged to `main` now builds the
   `.exe` on GitHub and publishes it as a Release automatically
 - **Check for Updates** button in the header (tells you if you're current)
@@ -22,7 +37,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Discovery: Copy IPs / Copy MACs / Export CSV** for the selected rows
 - Discovery progress bar, "Showing X of Y" counter and an end-of-scan summary
 - Log panel: timestamps, **Copy** and **Save...** buttons
-- Keyboard shortcuts: Ctrl+1..5 switch tabs, Ctrl+F search devices, Ctrl+L clear log
+- Keyboard shortcuts: Ctrl+1..5 switch pages, Ctrl+F search devices, Ctrl+L clear log
 
 ### Changed
 - Discovery results are sorted by IP by default instead of arrival order
@@ -32,6 +47,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - Subnet field is a dropdown of the PC's detected subnets (still editable); Enter starts a scan
 
 ### Fixed (since 1.1.0)
+- Several manufacturer labels in the old built-in list were wrong (e.g.
+  4C:5E:0C was shown as Ubiquiti but is MikroTik)
+- Light mode left most tabs with dark, hard-coded colours
 - Adoption now runs `set-inform` in a real interactive shell, so it resolves
   like a manual SSH session (fixes "command not found" on some devices)
 - Device's `set-inform` reply is echoed to the log for clearer results

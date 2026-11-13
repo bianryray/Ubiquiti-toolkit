@@ -57,6 +57,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Refresh manufacturer (OUI) list from IEEE
+        if: steps.exists.outputs.skip == 'false'
+        continue-on-error: true   # keep the committed copy if IEEE is down
+        run: python tools/update_oui.py
+
       - name: Build exe
         if: steps.exists.outputs.skip == 'false'
         run: >

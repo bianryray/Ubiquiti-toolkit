@@ -10,22 +10,23 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from ..core.discovery import NetworkScanner, get_local_subnets
+from ..core.oui import db_info, lookup_vendor, reload_db, user_db_path
+from ..core.oui_sources import fetch_registry, save_table
 from ..utils import LogFn
+from .. import theme as T
 from ..theme import (
-    BG_CARD, BG_CARD_ALT, SEPARATOR, BORDER, TEXT_ON_CARD, TEXT_DIM,
-    SUCCESS, SUCCESS_HOVER, TEXT_ON_SUCCESS, DANGER, DANGER_HOVER,
-    GHOST_HOVER, ROW_STRIPE,
-    FONT_LABEL, FONT_HEADING, FONT_SMALL, FONT_SMALL_BOLD, FONT_BTN_BOLD,
-    FONT_MONO, section_card,
+    BG_CARD_ALT, TEXT, TEXT_DIM, SUCCESS, ROW_STRIPE,
+    FONT_LABEL, FONT_SMALL, FONT_SMALL_BOLD, FONT_MONO_SMALL,
 )
 
 # (key, header text, width)
 COLUMNS = [
-    ("ip", "IP Address", 140),
-    ("mac", "MAC", 160),
-    ("vendor", "Manufacturer", 180),
-    ("ports", "Open Ports", 120),
-    ("banner", "SSH Banner", 240),
+    ("ip", "IP ADDRESS", 125),
+    ("hostname", "HOSTNAME", 170),
+    ("mac", "MAC", 145),
+    ("vendor", "MANUFACTURER", 190),
+    ("ports", "PORTS", 95),
+    ("banner", "SSH BANNER", 170),
 ]
 
 _HEX_ONLY = re.compile(r"^[0-9a-fA-F:.\-]+$")
@@ -54,6 +55,7 @@ def _matches(result: dict, terms) -> bool:
     separators, so 'aabbcc', 'aa:bb:cc' and 'AA-BB-CC' all find the same row."""
     haystack = " ".join([
         result.get("ip", ""),
+        result.get("hostname", ""),
         result.get("mac", ""),
         result.get("vendor", ""),
         " ".join(str(p) for p in result.get("ports", [])),
@@ -93,143 +95,108 @@ class DiscoveryTab(ctk.CTkFrame):
         return [e["data"] for e in self.entries]
 
     def _build_ui(self):
-        # ── Scan controls ────────────────────────────────────
-        ctrl_card = section_card(self, "Network Scan")
-        row = ctk.CTkFrame(ctrl_card, fg_color="transparent")
-        row.pack(fill="x", padx=14, pady=(0, 10))
+        T.page_header(
+            self, "Discovery",
+            "Scan a subnet for devices, identify them by manufacturer, and send them to adoption.",
+        )
 
-        ctk.CTkLabel(row, text="Subnet", font=FONT_LABEL).pack(side="left", padx=(0, 8))
+        # ── Scan controls ────────────────────────────────────
+        scan = T.card(self)
+        row = T.row(scan)
+        T.label(row, "Subnet", bold=True).pack(side="left", padx=(0, 10))
         subnets = get_local_subnets()
         self.var_subnet = ctk.StringVar(value=subnets[0] if subnets else "")
         self.subnet_box = ctk.CTkComboBox(
-            row, variable=self.var_subnet, values=subnets, width=200, height=32,
+            row, variable=self.var_subnet, values=subnets, width=200, height=T.CONTROL_H,
+            corner_radius=T.RADIUS_SM, border_width=1, border_color=T.BORDER_INPUT,
+            fg_color=T.BG_INPUT, button_color=T.BORDER_INPUT, text_color=TEXT,
+            font=FONT_LABEL, dropdown_font=FONT_LABEL,
         )
-        self.subnet_box.pack(side="left", padx=(0, 8))
+        self.subnet_box.pack(side="left", padx=(0, 10))
         self.subnet_box.bind("<Return>", lambda e: self._on_scan())
 
-        self.btn_scan = ctk.CTkButton(
-            row, text="Scan", command=self._on_scan,
-            width=80, height=32, font=FONT_BTN_BOLD,
-            fg_color=SUCCESS, hover_color=SUCCESS_HOVER, text_color=TEXT_ON_SUCCESS,
-        )
+        self.btn_scan = T.button(row, "Scan Network", self._on_scan, kind="primary", width=130)
         self.btn_scan.pack(side="left", padx=(0, 8))
+        self.btn_stop = T.button(row, "Stop", self._on_stop, kind="danger-outline",
+                                 width=80, state="disabled")
+        self.btn_stop.pack(side="left", padx=(0, 16))
 
-        self.btn_stop = ctk.CTkButton(
-            row, text="Stop", command=self._on_stop,
-            width=80, height=32, font=FONT_LABEL,
-            fg_color=DANGER, hover_color=DANGER_HOVER, state="disabled",
-        )
-        self.btn_stop.pack(side="left", padx=(0, 12))
-
-        self.progress = ctk.CTkProgressBar(row, width=160, height=10)
+        prog = ctk.CTkFrame(row, fg_color="transparent")
+        prog.pack(side="left", fill="x", expand=True)
+        self.var_progress = ctk.StringVar(value="Ready")
+        ctk.CTkLabel(prog, textvariable=self.var_progress, font=FONT_SMALL,
+                     text_color=TEXT_DIM, anchor="w").pack(fill="x")
+        self.progress = ctk.CTkProgressBar(prog, height=6, corner_radius=3,
+                                           progress_color=T.ACCENT, fg_color=BG_CARD_ALT)
         self.progress.set(0)
-        self.progress.pack(side="left", padx=(0, 8))
-
-        self.var_progress = ctk.StringVar(value="")
-        ctk.CTkLabel(
-            row, textvariable=self.var_progress,
-            font=FONT_SMALL, text_color=TEXT_DIM,
-        ).pack(side="left")
+        self.progress.pack(fill="x", pady=(2, 0))
 
         # ── Results ──────────────────────────────────────────
-        results_card = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=8)
-        results_card.pack(fill="both", expand=True, padx=4, pady=(0, 8))
-
-        results_header = ctk.CTkFrame(results_card, fg_color="transparent")
-        results_header.pack(fill="x", padx=14, pady=(10, 2))
-        ctk.CTkLabel(
-            results_header, text="Discovered Devices", font=FONT_HEADING,
-            text_color=TEXT_ON_CARD,
-        ).pack(side="left")
+        results, head = T.card(self, "Devices", expand=True, actions=True)
+        self.results_body = results
 
         self.var_count = ctk.StringVar(value="")
-        ctk.CTkLabel(
-            results_header, textvariable=self.var_count,
-            font=FONT_SMALL, text_color=TEXT_DIM,
-        ).pack(side="right")
-
+        ctk.CTkLabel(head, textvariable=self.var_count, font=FONT_SMALL,
+                     text_color=TEXT_DIM).pack(side="right", padx=(14, 0))
         self.var_only_ubnt = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            results_header, text="Only Ubiquiti", variable=self.var_only_ubnt,
-            command=self._refresh_view, font=FONT_LABEL,
-            checkbox_width=18, checkbox_height=18, text_color=TEXT_ON_CARD,
-        ).pack(side="right", padx=(0, 14))
-
-        ctk.CTkButton(
-            results_header, text="✕", width=28, height=28,
-            fg_color="transparent", hover_color=GHOST_HOVER,
-            text_color=TEXT_DIM, command=self._clear_search,
-        ).pack(side="right", padx=(2, 12))
-
+        T.switch(head, "Only Ubiquiti", self.var_only_ubnt,
+                 self._refresh_view).pack(side="right", padx=(14, 0))
         # No textvariable: CTkEntry hides its placeholder when one is set.
-        self.search_entry = ctk.CTkEntry(
-            results_header, width=300, height=30,
-            placeholder_text="Search MAC, IP, manufacturer...  (Ctrl+F)",
+        self.search_entry = T.entry(
+            head, width=320, placeholder="Search MAC, IP, hostname, manufacturer...",
         )
         self.search_entry.pack(side="right")
         self.search_entry.bind("<Escape>", lambda e: self._clear_search())
         self.search_entry.bind("<KeyRelease>", lambda e: self._schedule_refresh())
 
-        sep = ctk.CTkFrame(results_card, height=1, fg_color=SEPARATOR)
-        sep.pack(fill="x", padx=14, pady=(4, 4))
-
         # Column headers -- click to sort, click again to reverse.
-        header = ctk.CTkFrame(results_card, fg_color=BG_CARD_ALT, corner_radius=0)
-        header.pack(fill="x", padx=14, pady=(0, 2))
-        ctk.CTkLabel(header, text="", width=36).pack(side="left")
+        header = ctk.CTkFrame(results, fg_color=BG_CARD_ALT, corner_radius=T.RADIUS_SM)
+        header.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(header, text="", width=40).pack(side="left")
         for key, title, width in COLUMNS:
             btn = ctk.CTkButton(
-                header, text=title, width=width, height=26, anchor="w",
+                header, text=title, width=width, height=30, anchor="w",
                 font=FONT_SMALL_BOLD, text_color=TEXT_DIM,
-                fg_color="transparent", hover_color=GHOST_HOVER, corner_radius=4,
+                fg_color="transparent", hover_color=T.BG_HOVER, corner_radius=6,
                 command=lambda k=key: self._on_sort(k),
             )
             btn.pack(side="left")
             self._header_btns[key] = (btn, title)
         self._update_header_labels()
 
-        # Scrollable results
         self.results_scroll = ctk.CTkScrollableFrame(
-            results_card, fg_color="transparent",
+            results, fg_color="transparent", scrollbar_button_color=T.BORDER_INPUT,
         )
-        self.results_scroll.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        self.results_scroll.pack(fill="both", expand=True)
 
         self.empty_label = ctk.CTkLabel(
-            self.results_scroll, text="No scan yet. Pick a subnet and press Scan.",
-            font=FONT_SMALL, text_color=TEXT_DIM,
+            self.results_scroll,
+            text="No scan yet.\nPick a subnet above and press Scan Network.",
+            font=FONT_LABEL, text_color=TEXT_DIM, justify="center",
         )
-        self.empty_label.pack(pady=20)
+        self.empty_label.pack(pady=40)
 
-        ctk.CTkLabel(
-            results_card,
-            text="Tip: click a column to sort - right-click a row for more options - "
-                 "double-click to tick/untick",
-            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
-        ).pack(fill="x", padx=14, pady=(0, 8))
+        # ── Footer actions ───────────────────────────────────
+        T.divider(results, pady=(8, 10))
+        foot = T.row(results)
+        for text, cmd in (("Select all", self._select_all),
+                          ("Select none", self._deselect_all),
+                          ("Copy IPs", lambda: self._copy_selected("ip")),
+                          ("Copy MACs", lambda: self._copy_selected("mac")),
+                          ("Export CSV", self._export_csv)):
+            T.button(foot, text, cmd, kind="secondary", height=32).pack(side="left", padx=(0, 6))
+        T.button(foot, "Adopt Selected", self._adopt_selected, kind="success",
+                 width=150).pack(side="right")
 
-        # ── Bottom actions ───────────────────────────────────
-        bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.pack(fill="x", padx=4, pady=(0, 4))
-
-        def ghost(text, cmd, width):
-            ctk.CTkButton(
-                bottom, text=text, command=cmd,
-                width=width, height=32, font=FONT_LABEL,
-                fg_color="transparent", hover_color=GHOST_HOVER,
-                border_width=1, border_color=BORDER, text_color=TEXT_ON_CARD,
-            ).pack(side="left", padx=(0, 6))
-
-        ghost("Select All", self._select_all, 90)
-        ghost("Deselect All", self._deselect_all, 100)
-        ghost("Copy IPs", lambda: self._copy_selected("ip"), 80)
-        ghost("Copy MACs", lambda: self._copy_selected("mac"), 90)
-        ghost("Export CSV...", self._export_csv, 100)
-
-        ctk.CTkButton(
-            bottom, text="Adopt Selected", command=self._adopt_selected,
-            width=140, height=32, font=FONT_BTN_BOLD,
-            fg_color=SUCCESS, hover_color=SUCCESS_HOVER, text_color=TEXT_ON_SUCCESS,
-        ).pack(side="right")
+        meta = T.row(results, pady=(10, 0))
+        self.var_dbinfo = ctk.StringVar(value=f"Manufacturer list: {db_info()}")
+        T.label(meta, "Click a column to sort  \u00b7  right-click a row for options  \u00b7  "
+                      "double-click to tick", dim=True, small=True).pack(side="left")
+        self.btn_update_db = T.button(meta, "Update manufacturer list", self._update_vendor_db,
+                                      kind="ghost", height=26, text_color=T.ACCENT)
+        self.btn_update_db.pack(side="right")
+        ctk.CTkLabel(meta, textvariable=self.var_dbinfo, font=FONT_SMALL,
+                     text_color=T.TEXT_FAINT).pack(side="right", padx=(0, 6))
 
         # Right-click menu (rebuilt per row on demand)
         self._menu = tk.Menu(self, tearoff=0)
@@ -252,6 +219,7 @@ class DiscoveryTab(ctk.CTkFrame):
         self.btn_scan.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.empty_label.configure(text="Scanning...")
+        self.var_progress.set(f"Scanning {subnet} ...")
         self.scanner = NetworkScanner(log=self.log, max_workers=50)
 
         def on_found(result):
@@ -294,10 +262,9 @@ class DiscoveryTab(ctk.CTkFrame):
         for e in self.entries:
             e["row"].destroy()
         self.entries = []
-        self.var_progress.set("")
         self.progress.set(0)
         self._update_count(0)
-        self.empty_label.pack(pady=20)
+        self.empty_label.pack(pady=40)
 
     @staticmethod
     def _is_ubnt(result) -> bool:
@@ -308,30 +275,33 @@ class DiscoveryTab(ctk.CTkFrame):
             self.empty_label.pack_forget()
 
         var = ctk.BooleanVar(value=True)
-        row = ctk.CTkFrame(self.results_scroll, fg_color="transparent", corner_radius=4)
-        entry = {"data": result, "var": var, "row": row}
+        row = ctk.CTkFrame(self.results_scroll, fg_color="transparent",
+                           corner_radius=6, height=34)
+        entry = {"data": result, "var": var, "row": row, "labels": {}}
 
         ctk.CTkCheckBox(
-            row, text="", variable=var, width=36,
-            checkbox_width=18, checkbox_height=18,
-        ).pack(side="left")
+            row, text="", variable=var, width=40,
+            checkbox_width=18, checkbox_height=18, corner_radius=5, border_width=2,
+            border_color=T.BORDER_INPUT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+        ).pack(side="left", padx=(8, 0))
 
-        vendor = result.get("vendor", "") or "—"
-        is_ubnt = self._is_ubnt(result)
-        cells = [
-            (result["ip"], FONT_LABEL, TEXT_ON_CARD),
-            (result.get("mac", "") or "—", FONT_MONO, TEXT_DIM),
-            (vendor, FONT_LABEL, SUCCESS if is_ubnt else TEXT_DIM),
-            (", ".join(str(p) for p in result.get("ports", [])), FONT_LABEL, TEXT_ON_CARD),
-            ((result.get("banner", "") or "")[:60], FONT_SMALL, TEXT_DIM),
-        ]
+        cells = {
+            "ip": (result["ip"], FONT_LABEL, TEXT),
+            "hostname": (result.get("hostname", "") or "\u2014", FONT_LABEL, TEXT_DIM),
+            "mac": (result.get("mac", "") or "\u2014", FONT_MONO_SMALL, TEXT_DIM),
+            "vendor": ("", FONT_LABEL, TEXT_DIM),
+            "ports": (", ".join(str(p) for p in result.get("ports", [])), FONT_LABEL, TEXT),
+            "banner": ((result.get("banner", "") or "")[:40], FONT_SMALL, T.TEXT_FAINT),
+        }
         widgets = [row]
-        for (key, _title, width), (text, font, color) in zip(COLUMNS, cells):
-            lbl = ctk.CTkLabel(
-                row, text=text, width=width, font=font, anchor="w", text_color=color,
-            )
-            lbl.pack(side="left")
+        for key, _title, width in COLUMNS:
+            text, font, color = cells[key]
+            lbl = ctk.CTkLabel(row, text=text, width=width, font=font, anchor="w",
+                               text_color=color)
+            lbl.pack(side="left", padx=(0, 0), pady=3)
+            entry["labels"][key] = lbl
             widgets.append(lbl)
+        self._paint_vendor(entry)
 
         for w in widgets:
             w.bind("<Button-3>", lambda ev, en=entry: self._show_menu(ev, en))
@@ -339,6 +309,47 @@ class DiscoveryTab(ctk.CTkFrame):
 
         self.entries.append(entry)
         self._schedule_refresh()
+
+    def _paint_vendor(self, entry):
+        vendor = entry["data"].get("vendor", "") or "\u2014"
+        if self._is_ubnt(entry["data"]):
+            color = SUCCESS
+        elif vendor.startswith(("Unknown", "Private")):
+            color = T.TEXT_FAINT
+        else:
+            color = TEXT
+        entry["labels"]["vendor"].configure(text=vendor, text_color=color)
+
+    def _update_vendor_db(self):
+        self.btn_update_db.configure(state="disabled", text="Updating...")
+
+        def worker():
+            try:
+                table = fetch_registry(self.log)
+                save_table(table, user_db_path(),
+                           f"IEEE registry, downloaded {datetime.now():%Y-%m-%d}")
+                info = reload_db()
+            except Exception as e:
+                err = str(e)
+                self.after(0, lambda: self._on_db_updated(None, err))
+                return
+            self.after(0, lambda: self._on_db_updated(info, ""))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_db_updated(self, info, err):
+        self.btn_update_db.configure(state="normal", text="Update manufacturer list")
+        if err:
+            self.log(f"Manufacturer list update failed: {err}")
+            return
+        self.var_dbinfo.set(f"Manufacturer list: {info}")
+        self.log(f"Manufacturer list updated ({info}).")
+        for e in self.entries:  # relabel what's already on screen
+            mac = e["data"].get("mac")
+            if mac:
+                e["data"]["vendor"] = lookup_vendor(mac)
+                self._paint_vendor(e)
+        self._refresh_view()
 
     # ── Sort / filter / render ───────────────────────────────
 
@@ -354,7 +365,7 @@ class DiscoveryTab(ctk.CTkFrame):
         for key, (btn, title) in self._header_btns.items():
             if key == self.sort_key:
                 arrow = " ▼" if self.sort_desc else " ▲"
-                btn.configure(text=title + arrow, text_color=TEXT_ON_CARD)
+                btn.configure(text=title + arrow, text_color=TEXT)
             else:
                 btn.configure(text=title, text_color=TEXT_DIM)
 
@@ -388,12 +399,12 @@ class DiscoveryTab(ctk.CTkFrame):
         for e in self.entries:
             e["row"].pack_forget()
         for i, e in enumerate(visible):
-            e["row"].configure(fg_color=ROW_STRIPE if i % 2 == 0 else "transparent")
+            e["row"].configure(fg_color=ROW_STRIPE if i % 2 else "transparent")
             e["row"].pack(fill="x", pady=1)
         self._update_count(len(visible))
         if self.entries and not visible:
             self.empty_label.configure(text="No devices match your search.")
-            self.empty_label.pack(pady=20)
+            self.empty_label.pack(pady=40)
         elif self.entries:
             self.empty_label.pack_forget()
 
@@ -452,10 +463,11 @@ class DiscoveryTab(ctk.CTkFrame):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["IP", "MAC", "Manufacturer", "Open Ports", "SSH Banner"])
+                w.writerow(["IP", "Hostname", "MAC", "Manufacturer", "Open Ports", "SSH Banner"])
                 for r in rows:
                     w.writerow([
-                        r.get("ip", ""), r.get("mac", ""), r.get("vendor", ""),
+                        r.get("ip", ""), r.get("hostname", ""), r.get("mac", ""),
+                        r.get("vendor", ""),
                         " ".join(str(p) for p in r.get("ports", [])),
                         r.get("banner", ""),
                     ])
@@ -471,6 +483,9 @@ class DiscoveryTab(ctk.CTkFrame):
         m.delete(0, "end")
         m.add_command(label=f"Copy IP  ({r['ip']})",
                       command=lambda: self._copy(r["ip"], "IP"))
+        if r.get("hostname"):
+            m.add_command(label=f"Copy hostname  ({r['hostname']})",
+                          command=lambda: self._copy(r["hostname"], "hostname"))
         if r.get("mac"):
             m.add_command(label=f"Copy MAC  ({r['mac']})",
                           command=lambda: self._copy(r["mac"], "MAC"))
