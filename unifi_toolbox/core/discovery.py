@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional, Callable
 
 from ..utils import SCAN_PORTS, SCAN_TIMEOUT, LogFn, noop_log
-from .oui import get_mac_for_ip, lookup_vendor
+from .oui import get_mac_for_ip, get_hostname, lookup_vendor
 
 
 def get_local_subnets() -> List[str]:
@@ -58,6 +58,7 @@ def scan_host(host: str, ports: List[int] = None, timeout: float = SCAN_TIMEOUT)
     # remote devices or cross-subnet hosts won't have an ARP entry.
     mac = get_mac_for_ip(host) or ""
     vendor = lookup_vendor(mac) if mac else ""
+    hostname = get_hostname(host)
 
     return {
         "ip": host,
@@ -65,6 +66,7 @@ def scan_host(host: str, ports: List[int] = None, timeout: float = SCAN_TIMEOUT)
         "banner": banner,
         "mac": mac,
         "vendor": vendor,
+        "hostname": hostname,
         "status": "found",
     }
 

@@ -1,200 +1,102 @@
-"""MAC address discovery + OUI (manufacturer) lookup.
-
-Why: a lot of unlabeled rows in the Discovery tab are actually printers, TVs,
-phones, etc. Showing the manufacturer helps filter the real Ubiquiti devices
-from everything else on the subnet.
+"""MAC address discovery + manufacturer (OUI) lookup.
 
 Strategy:
   1. Once a host is confirmed up (at least one open TCP port), ping it to
      force an ARP-cache entry, then shell out to the OS `arp` tool to read
-     the MAC. This works on Windows / macOS / Linux without any elevated
-     privileges and without extra dependencies.
-  2. Look up the first 3 bytes of the MAC (OUI) against a small bundled
-     table. The table is Ubiquiti-heavy but also covers the usual suspects
-     you'd see scanning a home / SMB network.
+     the MAC. Works on Windows / macOS / Linux without elevated privileges.
+  2. Look the MAC up in the full IEEE registry (MA-L / MA-M / MA-S, ~54k
+     prefixes) bundled at unifi_toolbox/data/oui.txt.gz, longest prefix
+     first. "Update manufacturer list" in the Discovery tab downloads a
+     fresh copy into the user's config folder, which then takes priority.
+  3. MACs with the locally-administered bit set are not in any registry --
+     they're phones / laptops using private (randomized) Wi-Fi addresses,
+     VMs, containers, etc. -- so they're labelled as such instead of "Unknown".
 """
 
 from __future__ import annotations
 
+import gzip
+import os
 import re
+import socket
 import subprocess
 import sys
-from typing import Optional
+import threading
+from datetime import datetime
+from typing import Dict, Optional
 
-# -- Built-in OUI table -----------------------------------------------------
-# First 6 hex chars of the MAC (uppercase, no separators) -> vendor name.
-# Not exhaustive -- this is a pragmatic list for Ubiquiti networks. Users can
-# still see "Unknown" for devices we don't recognise, which is fine.
-_OUI_TABLE: dict[str, str] = {
-    # ---- Ubiquiti (many ranges over the years) ----
-    "002722": "Ubiquiti Networks",
-    "00156D": "Ubiquiti Networks",
-    "0418D6": "Ubiquiti Networks",
-    "0CEA14": "Ubiquiti Networks",
-    "18E829": "Ubiquiti Networks",
-    "245A4C": "Ubiquiti Networks",
-    "24A43C": "Ubiquiti Networks",
-    "28704E": "Ubiquiti Networks",
-    "44D9E7": "Ubiquiti Networks",
-    "4C5E0C": "Ubiquiti Networks",
-    "68725B": "Ubiquiti Networks",
-    "68D79A": "Ubiquiti Networks",
-    "702A0B": "Ubiquiti Networks",
-    "74ACB9": "Ubiquiti Networks",
-    "7483C2": "Ubiquiti Networks",
-    "788A20": "Ubiquiti Networks",
-    "802AA8": "Ubiquiti Networks",
-    "9024E8": "Ubiquiti Networks",
-    "942A6F": "Ubiquiti Networks",
-    "B4FBE4": "Ubiquiti Networks",
-    "DC9FDB": "Ubiquiti Networks",
-    "E063DA": "Ubiquiti Networks",
-    "E4383C": "Ubiquiti Networks",
-    "F09FC2": "Ubiquiti Networks",
-    "F492BF": "Ubiquiti Networks",
-    "F4E2C6": "Ubiquiti Networks",
-    "FCECDA": "Ubiquiti Networks",
-    # ---- Common infrastructure ----
-    "001B17": "Cisco",
-    "0023DC": "Cisco",
-    "0024F7": "Cisco",
-    "001560": "Aruba / HPE",
-    "001A1E": "Aruba / HPE",
-    "6CF37F": "Aruba / HPE",
-    "2CFDA1": "Aruba / HPE",
-    "9C1C12": "Juniper",
-    "001E79": "Mikrotik",
-    "48A98A": "Mikrotik",
-    "B869F4": "Mikrotik",
-    "CC2DE0": "Mikrotik",
-    "6C3B6B": "Mikrotik",
-    # ---- TP-Link ----
-    "001DAA": "TP-Link",
-    "001D0F": "TP-Link",
-    "144D67": "TP-Link",
-    "30B5C2": "TP-Link",
-    "50C7BF": "TP-Link",
-    "6C5AB0": "TP-Link",
-    "A42BB0": "TP-Link",
-    "AC84C6": "TP-Link",
-    "C0C9E3": "TP-Link",
-    "E8DE27": "TP-Link",
-    "F4F26D": "TP-Link",
-    # ---- Netgear ----
-    "000FB5": "Netgear",
-    "001B2F": "Netgear",
-    "0024B2": "Netgear",
-    "20E52A": "Netgear",
-    "28C68E": "Netgear",
-    "30469A": "Netgear",
-    "44A56E": "Netgear",
-    "9C3DCF": "Netgear",
-    "A040A0": "Netgear",
-    # ---- ASUS ----
-    "001FC6": "ASUS",
-    "04D4C4": "ASUS",
-    "0C9D92": "ASUS",
-    "305A3A": "ASUS",
-    "386077": "ASUS",
-    "50465D": "ASUS",
-    "704D7B": "ASUS",
-    "AC220B": "ASUS",
-    "E0CB4E": "ASUS",
-    # ---- Apple ----
-    "0003FF": "Apple",
-    "0016CB": "Apple",
-    "001B63": "Apple",
-    "001EC2": "Apple",
-    "002312": "Apple",
-    "002332": "Apple",
-    "002608": "Apple",
-    "002500": "Apple",
-    "003065": "Apple",
-    "0050E4": "Apple",
-    "080007": "Apple",
-    "14109F": "Apple",
-    "1CE62B": "Apple",
-    "24A074": "Apple",
-    "3C0754": "Apple",
-    "406C8F": "Apple",
-    "60334B": "Apple",
-    "7014A6": "Apple",
-    "78CA39": "Apple",
-    "90840D": "Apple",
-    "A4B197": "Apple",
-    "B8C111": "Apple",
-    "BC926B": "Apple",
-    "D0034B": "Apple",
-    "E0ACCB": "Apple",
-    "F4F951": "Apple",
-    # ---- Samsung ----
-    "001377": "Samsung",
-    "0023D6": "Samsung",
-    "002454": "Samsung",
-    "00265D": "Samsung",
-    "08ECA9": "Samsung",
-    "0C8910": "Samsung",
-    "0CDFA4": "Samsung",
-    "14F42A": "Samsung",
-    "30CDA7": "Samsung",
-    "84A466": "Samsung",
-    "A81DE0": "Samsung",
-    "B43A28": "Samsung",
-    "E8508B": "Samsung",
-    "F4428F": "Samsung",
-    # ---- Google / Nest ----
-    "001A11": "Google",
-    "18B430": "Nest Labs / Google",
-    "1CF29A": "Google",
-    "6466B3": "Google",
-    "7CD1C3": "Google",
-    "F4F5D8": "Google",
-    # ---- Amazon ----
-    "0832B8": "Amazon",
-    "181994": "Amazon",
-    "34D270": "Amazon",
-    "444602": "Amazon",
-    "68DBF5": "Amazon",
-    "F0272D": "Amazon",
-    "FC65DE": "Amazon",
-    # ---- Roku / media ----
-    "0C1724": "Roku",
-    "8C49B6": "Roku",
-    "AC3A7A": "Roku",
-    "B0A737": "Roku",
-    "B83E59": "Roku",
-    # ---- Printers ----
-    "0011B3": "HP",
-    "001279": "HP",
-    "001A4B": "HP",
-    "002655": "HP",
-    "6C3BE5": "HP",
-    "B499BA": "HP",
-    "001B78": "HP",
-    "00065B": "Brother",
-    "008092": "Brother",
-    # ---- Raspberry Pi (default Eth, WiFi) ----
-    "B827EB": "Raspberry Pi Foundation",
-    "DCA632": "Raspberry Pi Foundation",
-    "E45F01": "Raspberry Pi Foundation",
-    "D83ADD": "Raspberry Pi Foundation",
-    "28CDC1": "Raspberry Pi Foundation",
-    # ---- Intel NICs ----
-    "001E67": "Intel",
-    "0022FA": "Intel",
-    "3C970E": "Intel",
-    "50B7C3": "Intel",
-    "7C5CF8": "Intel",
-    "A0A8CD": "Intel",
-    "A4C494": "Intel",
-    "C03FD5": "Intel",
-    # ---- Realtek / generic ----
-    "001E58": "Realtek",
-    "52540": "QEMU / KVM (virt)",
-    # ---- Synology / QNAP ----
-    "0011322": "Synology",
-    "245EBE": "QNAP",
+from .oui_sources import load_table
+
+_BUNDLED_DB = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "oui.txt.gz",
+)
+
+# Friendlier display names for a few registry entries.
+_ALIASES = {
+    "Routerboard.com": "MikroTik (Routerboard)",
+    "IEEE Registration Authority": "Unknown (IEEE block)",
 }
+
+_db: Optional[Dict[str, str]] = None
+_db_source = ""
+_db_lock = threading.Lock()
+
+
+def user_db_path() -> str:
+    """Downloaded copy in %APPDATA%/UniFiToolbox (or ~/.config/UniFiToolbox)."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config"))
+    folder = os.path.join(base, "UniFiToolbox")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "oui.txt.gz")
+
+
+def _built_date(path: str) -> str:
+    """Date from the file's '# ... built YYYY-MM-DD' header line. (File mtime
+    is useless in the packaged .exe: it's the extraction time.)"""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            m = re.search(r"\d{4}-\d{2}-\d{2}", f.readline())
+        if m:
+            return m.group(0)
+    except OSError:
+        pass
+    return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d")
+
+
+def _load_db() -> Dict[str, str]:
+    global _db, _db_source
+    with _db_lock:
+        if _db is not None:
+            return _db
+        # Prefer whichever copy is newer: a later app release may bundle a
+        # fresher list than one the user downloaded months ago.
+        candidates = [(_built_date(p), label, p) for p, label in
+                      ((user_db_path(), "downloaded"), (_BUNDLED_DB, "built-in"))
+                      if os.path.exists(p)]
+        for built, label, path in sorted(candidates, reverse=True):
+            table = load_table(path)
+            if table:
+                _db, _db_source = table, f"{label}, {len(table):,} prefixes, {built}"
+                return _db
+        _db, _db_source = {}, "missing"
+        return _db
+
+
+def reload_db() -> str:
+    """Drop the cached table (after an update) and load again. Returns info."""
+    global _db
+    with _db_lock:
+        _db = None
+    _load_db()
+    return _db_source
+
+
+def db_info() -> str:
+    _load_db()
+    return _db_source
 
 
 _MAC_RE = re.compile(
@@ -209,14 +111,22 @@ def _normalize(mac: str) -> str:
 
 
 def lookup_vendor(mac: str) -> str:
-    """Return vendor name for a MAC, or 'Unknown' if not in the table."""
+    """Return the manufacturer for a MAC, or a descriptive fallback."""
     if not mac:
         return ""
     n = _normalize(mac)
     if len(n) < 6:
         return ""
-    oui = n[:6]
-    return _OUI_TABLE.get(oui, "Unknown")
+    db = _load_db()
+    for length in (9, 7, 6):  # MA-S, MA-M, MA-L: most specific first
+        name = db.get(n[:length])
+        if name:
+            return _ALIASES.get(name, name)
+    if n.startswith("525400"):
+        return "QEMU / KVM virtual NIC"
+    if int(n[1], 16) & 0x2:  # locally-administered bit
+        return "Private / randomized MAC"
+    return "Unknown"
 
 
 def format_mac(mac: str) -> str:
@@ -291,3 +201,22 @@ def get_mac_for_ip(ip: str) -> Optional[str]:
                 return None
             return format_mac(mac)
     return None
+
+
+def get_hostname(ip: str, timeout: float = 2.0) -> str:
+    """Reverse-DNS / NetBIOS name for `ip` (Windows resolves both through
+    gethostbyaddr). Returns '' when the device has no name or the lookup
+    takes longer than `timeout` -- NetBIOS misses can stall for seconds."""
+    result = []
+
+    def lookup():
+        try:
+            result.append(socket.gethostbyaddr(ip)[0])
+        except (OSError, UnicodeError):
+            pass
+
+    t = threading.Thread(target=lookup, daemon=True)
+    t.start()
+    t.join(timeout)
+    name = result[0] if result else ""
+    return "" if name == ip else name

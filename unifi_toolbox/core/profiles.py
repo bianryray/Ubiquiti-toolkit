@@ -139,6 +139,16 @@ class ProfileManager:
     def get_auto_load(self) -> bool:
         return self._settings.get("auto_load_last", False)
 
+    def get_setting(self, key: str, default=None):
+        return self._settings.get(key, default)
+
+    def set_setting(self, key: str, value):
+        self._settings[key] = value
+        try:
+            self._save_settings()
+        except OSError:
+            pass
+
     def set_auto_load(self, enabled: bool):
         self._settings["auto_load_last"] = enabled
         self._save_settings()

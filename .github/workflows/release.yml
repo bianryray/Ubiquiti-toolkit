@@ -1,0 +1,99 @@
+# Builds "UniFi Toolbox.exe" on Windows and publishes it as a GitHub Release.
+#
+# Runs whenever unifi_toolbox/version.py changes on main (i.e. a version bump
+# is merged), or manually from the Actions tab. If a release for the current
+# version already exists it does nothing, so re-runs are safe.
+#
+# The app's built-in updater reads the latest release, so publishing one here
+# is what makes "Check for Updates" / "Update Now" work on installed PCs.
+
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "unifi_toolbox/version.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('unifi_toolbox/version.py').read()).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Skip if this version is already released
+        id: exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.ver.outputs.tag }} already exists - nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.exists.outputs.skip == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Refresh manufacturer (OUI) list from IEEE
+        if: steps.exists.outputs.skip == 'false'
+        continue-on-error: true   # keep the committed copy if IEEE is down
+        run: python tools/update_oui.py
+
+      - name: Build exe
+        if: steps.exists.outputs.skip == 'false'
+        run: >
+          python -m PyInstaller --noconfirm --onefile --windowed
+          --name "UniFi Toolbox"
+          --add-data "unifi_toolbox;unifi_toolbox"
+          --hidden-import=paramiko --hidden-import=requests
+          --hidden-import=customtkinter --hidden-import=_cffi_backend
+          --collect-all customtkinter
+          main.py
+
+      - name: Release notes from CHANGELOG.md
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        run: |
+          # Take the "## [x.y.z]" section for this version, up to the next "## [".
+          awk -v v="${{ steps.ver.outputs.version }}" '
+            $0 ~ "^## \\[" v "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "UniFi Toolbox ${{ steps.ver.outputs.tag }}" > notes.md; fi
+          cat notes.md
+
+      - name: Publish release
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "dist/UniFi Toolbox.exe" "UniFi-Toolbox.exe"
+          gh release create "${{ steps.ver.outputs.tag }}" "UniFi-Toolbox.exe" \
+            --target "${{ github.sha }}" \
+            --title "UniFi Toolbox ${{ steps.ver.outputs.tag }}" \
+            --notes-file notes.md

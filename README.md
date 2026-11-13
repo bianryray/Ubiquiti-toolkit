@@ -28,6 +28,28 @@ Built with Python and [CustomTkinter](https://github.com/TomSchimansky/CustomTki
 - Auto-detects your local subnet
 - Concurrent scanning (50 threads) for speed
 - Results table with checkboxes — select devices and send them directly to SSH batch adoption
+- **Search** by MAC, IP, manufacturer, port or banner (MAC search ignores `:` / `-`; Ctrl+F)
+- **Sort** by any column (click the header; click again to reverse)
+- Right-click a row to copy IP/MAC, open its web UI or adopt it; Copy IPs / Copy MACs / Export CSV for selected rows
+
+### Network Tests (Beta)
+- **Area Check** — run on the AP that serves a slow area; it checks the AP's link to the
+  gateway, the internet, DNS, the AP's uplink (cable speed / mesh signal), Wi-Fi channel
+  congestion, client signal and load, then says which is the likely cause
+- **AP ↔ Gateway**, **PC ↔ Device** and **PC ↔ PC** throughput tests (both directions)
+- PC tests listen on TCP port 50555 by default — allow UniFi Toolbox through Windows
+  Firewall (Private networks) when prompted
+- AP/switch CPUs can limit PC ↔ Device results; AP ↔ Gateway needs `iperf3` on both devices
+
+### Manufacturer identification
+- Full IEEE MAC registry (~54,000 prefixes) bundled and refreshed with every release
+- **Update manufacturer list** in Discovery downloads the latest copy on demand
+- Private / randomized MACs (phones, laptops) and virtual NICs are labelled clearly
+- Hostname (reverse DNS / NetBIOS) shown alongside
+
+### Updates
+- Checks GitHub Releases on startup and via **Check for Updates**
+- **Update Now** downloads the new `.exe`, closes, replaces itself and reopens — no git needed on the PC
 
 ### Connection Profiles
 - Save and load connection profiles (controller URL, SSH credentials, console credentials, SSH options)
@@ -37,7 +59,7 @@ Built with Python and [CustomTkinter](https://github.com/TomSchimansky/CustomTki
 
 ## Screenshots
 
-*Dark mode UI with tabbed interface — SSH Adoption, Console/API, Discovery, and Profiles tabs with a shared log panel.*
+*Sidebar navigation (SSH Adoption, Console / API, Discovery, Troubleshoot, Profiles), Light / Dark / System themes, and a collapsible colour-coded activity log.*
 
 ## Requirements
 
@@ -91,21 +113,44 @@ unifi-toolbox/
 ├── main.py                       # Entry point
 ├── build.bat                     # One-click build script
 ├── requirements.txt              # Python dependencies
+├── tools/
+│   └── update_oui.py             # Refresh the bundled manufacturer list
+├── .github/workflows/release.yml # Builds + publishes the .exe on version bumps
 ├── unifi_toolbox/
-│   ├── app.py                    # Main window, tabs, theme, log panel
+│   ├── app.py                    # Main window: sidebar, pages, activity log, updater UI
+│   ├── theme.py                  # Design system: palette + widget factories
+│   ├── version.py                # App version (bump to release)
 │   ├── utils.py                  # Constants, helpers, IP parsing
+│   ├── data/
+│   │   └── oui.txt.gz            # IEEE MAC registry (MA-L / MA-M / MA-S)
 │   ├── core/
 │   │   ├── ssh_manager.py        # SSH connection & command execution
 │   │   ├── api_client.py         # UniFi OS REST API wrapper
 │   │   ├── discovery.py          # Network port scanner
-│   │   ├── profiles.py           # JSON profile storage
-│   │   └── tasks.py              # Threaded tasks (adopt, batch, reset)
+│   │   ├── nettest.py            # Area check + speed tests (beta)
+│   │   ├── oui.py                # MAC lookup, manufacturer + hostname resolution
+│   │   ├── oui_sources.py        # Download / parse the IEEE registry
+│   │   ├── profiles.py           # JSON profile + settings storage
+│   │   ├── tasks.py              # Threaded tasks (adopt, batch, reset)
+│   │   └── updater.py            # GitHub release check + self-update
 │   └── tabs/
-│       ├── ssh_tab.py            # SSH adoption tab (single + batch)
-│       ├── console_tab.py        # Console / API management tab
-│       ├── discovery_tab.py      # Network discovery tab
-│       └── profiles_tab.py       # Profile management tab
+│       ├── ssh_tab.py            # SSH adoption (single + batch)
+│       ├── console_tab.py        # Console / API management
+│       ├── discovery_tab.py      # Network discovery
+│       ├── troubleshoot_tab.py   # One-click diagnostics
+│       ├── profiles_tab.py       # Profile management
+│       └── nettest_tab.py        # Network Tests page (beta)
 ```
+
+## Releasing an Update
+
+1. Bump `__version__` in `unifi_toolbox/version.py` and add a matching
+   `## [x.y.z]` section to `CHANGELOG.md` (used as the release notes).
+2. Merge to `main`. The **Build & Release** GitHub Action builds the `.exe` on
+   Windows and publishes release `vx.y.z` with `UniFi-Toolbox.exe` attached.
+   It can also be run by hand from the repo's **Actions** tab.
+3. Installed copies see the update banner next time they start (or when
+   **Check for Updates** is clicked) and can install it with **Update Now**.
 
 ## Usage Tips
 
@@ -115,6 +160,13 @@ unifi-toolbox/
 - **UXG/UAP/USW** leaf devices need to be adopted into an existing controller's site
 - Use **Discovery** to find devices on your network, then click **Adopt Selected** to send them to batch adoption
 - **Profiles** save all connection settings so you don't re-enter credentials across sessions
+
+## Credits
+
+Manufacturer data comes from the [IEEE Registration Authority](https://regauth.standards.ieee.org/)
+MA-L/MA-M/MA-S registries, with [oui-data](https://github.com/silverwind/oui-data)
+(BSD-2-Clause) as a fallback mirror. Refresh the bundled copy with
+`python tools/update_oui.py`.
 
 ## License
 

@@ -13,28 +13,7 @@ import customtkinter as ctk
 
 from ..core.ssh_manager import SSHManager
 from ..utils import DEFAULT_SSH_PORT, SSHOptions, LogFn
-
-# Shared palette (match other tabs)
-_CARD = "#2a2a3e"
-_ACCENT = "#0f3460"
-_ACCENT_HOVER = "#1a4a70"
-_DIM = "#8a8a9a"
-_LABEL_FONT = ("Segoe UI", 12)
-_HEADING_FONT = ("Segoe UI", 13, "bold")
-_SMALL = ("Segoe UI", 11)
-_ENTRY_W = 240
-
-
-def _section(parent, title: str) -> ctk.CTkFrame:
-    card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
-    card.pack(fill="x", padx=4, pady=(0, 8))
-    ctk.CTkLabel(
-        card, text=title, font=_HEADING_FONT,
-        text_color="#ffffff", anchor="w",
-    ).pack(fill="x", padx=14, pady=(10, 2))
-    sep = ctk.CTkFrame(card, height=1, fg_color="#3a3a4e")
-    sep.pack(fill="x", padx=14, pady=(0, 8))
-    return card
+from .. import theme as T
 
 
 # -- Command catalog per device type ---------------------------------------
@@ -127,108 +106,56 @@ class TroubleshootTab(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
+        page = T.scroll_page(self)
+        T.page_header(
+            page, "Troubleshoot",
+            "One-click diagnostics over SSH. Output goes to the activity log.",
+        )
 
         # ── Connection ──────────────────────────────────────
-        conn = _section(scroll, "Connection")
-        grid = ctk.CTkFrame(conn, fg_color="transparent")
-        grid.pack(fill="x", padx=14, pady=(0, 10))
-        grid.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(grid, text="Device IP", font=_LABEL_FONT, anchor="e").grid(
-            row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        conn = T.card(page, "Device")
+        g = ctk.CTkFrame(conn, fg_color="transparent")
+        g.pack(fill="x")
         self.var_ip = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_ip, width=_ENTRY_W, height=32).grid(
-            row=0, column=1, sticky="w", pady=4)
-
-        ctk.CTkLabel(grid, text="Username", font=_LABEL_FONT, anchor="e").grid(
-            row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_user = ctk.StringVar(value="ubnt")
-        self.ent_user = ctk.CTkEntry(grid, textvariable=self.var_user,
-                                     width=_ENTRY_W, height=32)
-        self.ent_user.grid(row=1, column=1, sticky="w", pady=4)
-
-        ctk.CTkLabel(grid, text="Password", font=_LABEL_FONT, anchor="e").grid(
-            row=2, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_pass = ctk.StringVar()
-        self.ent_pass = ctk.CTkEntry(
-            grid, textvariable=self.var_pass, show="*",
-            width=_ENTRY_W, height=32,
-        )
-        self.ent_pass.grid(row=2, column=1, sticky="w", pady=4)
-
-        self.var_default_creds = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            grid, text="Use default ubnt / ubnt",
-            variable=self.var_default_creds,
-            command=self._on_toggle_default_creds,
-            font=_SMALL, checkbox_width=18, checkbox_height=18,
-        ).grid(row=2, column=2, sticky="w", padx=(16, 0), pady=4)
-
-        ctk.CTkLabel(grid, text="SSH Port", font=_LABEL_FONT, anchor="e").grid(
-            row=3, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_port = ctk.StringVar(value=str(DEFAULT_SSH_PORT))
-        ctk.CTkEntry(grid, textvariable=self.var_port, width=80, height=32).grid(
-            row=3, column=1, sticky="w", pady=4)
+        T.field(g, 0, 0, "DEVICE IP", lambda c: T.entry(c, self.var_ip, width=200))
+        self.ent_user = T.field(g, 0, 1, "USERNAME",
+                                lambda c: T.entry(c, self.var_user, width=170)).input
+        self.ent_pass = T.field(g, 0, 2, "PASSWORD",
+                                lambda c: T.entry(c, self.var_pass, width=170, show="\u2022")).input
+        T.field(g, 0, 3, "SSH PORT", lambda c: T.entry(c, self.var_port, width=80))
+        self.var_default_creds = ctk.BooleanVar(value=False)
+        T.switch(conn, "Use default ubnt / ubnt", self.var_default_creds,
+                 self._on_toggle_default_creds).pack(anchor="w")
 
-        # ── Device type ─────────────────────────────────────
-        dtype_card = _section(scroll, "Device Type")
-        dtype_row = ctk.CTkFrame(dtype_card, fg_color="transparent")
-        dtype_row.pack(fill="x", padx=14, pady=(0, 10))
-
+        # ── Commands ────────────────────────────────────────
+        cmds, cmds_actions = T.card(page, "Diagnostic Commands",
+                                    "Pick the device type, then click a command", actions=True)
         self.var_dtype = ctk.StringVar(value="Console (UDM / UDR / UXG)")
-        self.dtype_menu = ctk.CTkSegmentedButton(
-            dtype_row, values=list(CATALOG.keys()),
-            variable=self.var_dtype, command=self._on_dtype_change,
-            font=_LABEL_FONT,
-        )
-        self.dtype_menu.pack(fill="x")
-
-        # ── Command buttons ─────────────────────────────────
-        self.cmds_card = _section(scroll, "Diagnostic Commands")
-        self.cmds_frame = ctk.CTkFrame(self.cmds_card, fg_color="transparent")
-        self.cmds_frame.pack(fill="x", padx=14, pady=(0, 10))
-
+        T.segmented(
+            cmds_actions, list(CATALOG.keys()),
+            var=self.var_dtype, command=self._on_dtype_change,
+        ).pack(side="right")
+        self.cmds_frame = ctk.CTkFrame(cmds, fg_color="transparent")
+        self.cmds_frame.pack(fill="x")
         self._render_buttons(self.var_dtype.get())
 
         # ── Custom command ──────────────────────────────────
-        custom = _section(scroll, "Custom Command")
-        crow = ctk.CTkFrame(custom, fg_color="transparent")
-        crow.pack(fill="x", padx=14, pady=(0, 10))
-
+        custom = T.card(
+            page, "Custom Command",
+            "The config CLI (show interfaces, show configuration, ...) lives behind "
+            "`telnet localhost` - tick the box to pipe your command into it.",
+        )
+        crow = T.row(custom)
         self.var_custom = ctk.StringVar(value="")
-        ctk.CTkEntry(
-            crow, textvariable=self.var_custom, width=420, height=32,
-            placeholder_text="e.g. show interfaces",
-        ).pack(side="left", padx=(0, 8))
-
+        ce = T.entry(crow, self.var_custom, width=420, mono=True)
+        ce.pack(side="left", padx=(0, 10))
+        ce.bind("<Return>", lambda e: self._on_run_custom())
         self.var_telnet = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            crow, text="Run via telnet localhost", variable=self.var_telnet,
-            font=_SMALL, checkbox_width=18, checkbox_height=18,
-        ).pack(side="left", padx=(0, 12))
-
-        ctk.CTkButton(
-            crow, text="Run", command=self._on_run_custom,
-            width=80, height=32, font=_LABEL_FONT,
-            fg_color=_ACCENT, hover_color=_ACCENT_HOVER,
-        ).pack(side="left")
-
-        # ── Help note ───────────────────────────────────────
-        help_note = ctk.CTkFrame(scroll, fg_color="transparent")
-        help_note.pack(fill="x", padx=4, pady=(4, 0))
-        ctk.CTkLabel(
-            help_note,
-            text=(
-                "Tip: on Ubiquiti devices the config CLI (show firewall, "
-                "show interfaces, show configuration, etc.) is a separate "
-                "shell you get to via `telnet localhost` after SSHing in. "
-                "Check 'Run via telnet localhost' to pipe the command into "
-                "that shell automatically."
-            ),
-            font=_SMALL, text_color=_DIM, wraplength=900, justify="left",
-        ).pack(anchor="w")
+        T.checkbox(crow, "Run via telnet localhost", self.var_telnet).pack(side="left", padx=(0, 12))
+        T.button(crow, "Run", self._on_run_custom, kind="primary", width=80).pack(side="left")
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -249,36 +176,30 @@ class TroubleshootTab(ctk.CTkFrame):
         for w in self.cmds_frame.winfo_children():
             w.destroy()
 
-        entries = CATALOG.get(dtype, [])
         grid = ctk.CTkFrame(self.cmds_frame, fg_color="transparent")
         grid.pack(fill="x")
         col_count = 3
+        for c in range(col_count):
+            grid.columnconfigure(c, weight=1, uniform="cmd")
 
-        col = 0
-        row = 0
-        for label, cmd, telnet in entries:
-            # Divider rows
-            if not cmd:
-                if col != 0:
-                    row += 1
-                    col = 0
-                ctk.CTkLabel(
-                    grid, text=label, font=_SMALL, text_color=_DIM, anchor="w",
-                ).grid(row=row, column=0, columnspan=col_count,
-                       sticky="w", padx=4, pady=(10, 4))
+        col = row = 0
+        for label, cmd, telnet in CATALOG.get(dtype, []):
+            if not cmd:  # divider row
+                if col:
+                    row, col = row + 1, 0
+                T.label(grid, label.strip("— ").upper(), dim=True, small=True,
+                        bold=True).grid(row=row, column=0, columnspan=col_count,
+                                        sticky="w", pady=(12, 4))
                 row += 1
                 continue
-
-            ctk.CTkButton(
-                grid, text=label,
-                command=lambda c=cmd, t=telnet, l=label: self._on_run_cmd(l, c, t),
-                width=230, height=32, font=_LABEL_FONT,
-                fg_color=_ACCENT, hover_color=_ACCENT_HOVER,
-            ).grid(row=row, column=col, padx=4, pady=4, sticky="w")
+            T.button(
+                grid, label,
+                lambda c=cmd, t=telnet, l=label: self._on_run_cmd(l, c, t),
+                kind="secondary", anchor="w",
+            ).grid(row=row, column=col, padx=(0, 8), pady=4, sticky="ew")
             col += 1
             if col >= col_count:
-                col = 0
-                row += 1
+                col, row = 0, row + 1
 
     def _get_port(self) -> int:
         try:

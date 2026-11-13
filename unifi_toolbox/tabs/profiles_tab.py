@@ -1,30 +1,10 @@
+from tkinter import messagebox
+
 import customtkinter as ctk
 
 from ..core.profiles import ProfileManager, Profile
 from ..utils import LogFn, DEFAULT_SSH_PORT
-
-# Shared palette
-_CARD = "#2a2a3e"
-_ACCENT = "#0f3460"
-_GREEN = "#00b894"
-_GREEN_HOVER = "#00a381"
-_RED = "#e94560"
-_RED_HOVER = "#c73e54"
-_DIM = "#8a8a9a"
-_LABEL_FONT = ("Segoe UI", 12)
-_HEADING_FONT = ("Segoe UI", 13, "bold")
-
-
-def _section(parent, title: str) -> ctk.CTkFrame:
-    card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
-    card.pack(fill="x", padx=4, pady=(0, 8))
-    ctk.CTkLabel(
-        card, text=title, font=_HEADING_FONT,
-        text_color="#ffffff", anchor="w",
-    ).pack(fill="x", padx=14, pady=(10, 2))
-    sep = ctk.CTkFrame(card, height=1, fg_color="#3a3a4e")
-    sep.pack(fill="x", padx=14, pady=(0, 8))
-    return card
+from .. import theme as T
 
 
 class ProfilesTab(ctk.CTkFrame):
@@ -45,52 +25,31 @@ class ProfilesTab(ctk.CTkFrame):
                 self.after(500, lambda: self._load_profile(last))
 
     def _build_ui(self):
-        # ── Profile list ─────────────────────────────────────
-        list_card = ctk.CTkFrame(self, fg_color=_CARD, corner_radius=8)
-        list_card.pack(fill="both", expand=True, padx=4, pady=(0, 8))
-
-        list_header = ctk.CTkFrame(list_card, fg_color="transparent")
-        list_header.pack(fill="x", padx=14, pady=(10, 2))
-        ctk.CTkLabel(
-            list_header, text="Saved Profiles", font=_HEADING_FONT,
-            text_color="#ffffff",
-        ).pack(side="left")
-
-        sep = ctk.CTkFrame(list_card, height=1, fg_color="#3a3a4e")
-        sep.pack(fill="x", padx=14, pady=(0, 8))
-
-        self.profiles_scroll = ctk.CTkScrollableFrame(
-            list_card, fg_color="transparent",
+        T.page_header(
+            self, "Profiles",
+            "Save controller, SSH and console settings so you don't retype them per site.",
         )
-        self.profiles_scroll.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
         # ── Save controls ────────────────────────────────────
-        save_card = _section(self, "Save Current Settings")
-        save_row = ctk.CTkFrame(save_card, fg_color="transparent")
-        save_row.pack(fill="x", padx=14, pady=(0, 10))
-
-        ctk.CTkLabel(save_row, text="Profile Name", font=_LABEL_FONT).pack(
-            side="left", padx=(0, 8))
+        save = T.card(self, "Save Current Settings",
+                      "Stores what's filled in on the SSH Adoption and Console tabs")
+        r = T.row(save)
         self.var_name = ctk.StringVar()
-        ctk.CTkEntry(save_row, textvariable=self.var_name, width=220, height=32).pack(
-            side="left", padx=(0, 8))
-        ctk.CTkButton(
-            save_row, text="Save", command=self._on_save,
-            width=80, height=32, font=("Segoe UI", 12, "bold"),
-            fg_color=_GREEN, hover_color=_GREEN_HOVER, text_color="#1a1a2e",
-        ).pack(side="left")
-
-        # ── Settings ─────────────────────────────────────────
-        settings_card = _section(self, "Settings")
-        settings_inner = ctk.CTkFrame(settings_card, fg_color="transparent")
-        settings_inner.pack(fill="x", padx=14, pady=(0, 10))
-
+        e = T.entry(r, self.var_name, width=260)
+        e.pack(side="left", padx=(0, 8))
+        e.bind("<Return>", lambda ev: self._on_save())
+        T.button(r, "Save Profile", self._on_save, kind="primary").pack(side="left")
         self.var_auto_load = ctk.BooleanVar(value=self.manager.get_auto_load())
-        ctk.CTkCheckBox(
-            settings_inner, text="Auto-load last used profile on startup",
-            variable=self.var_auto_load, command=self._on_auto_load_toggle,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).pack(anchor="w")
+        T.switch(r, "Load last used profile on startup", self.var_auto_load,
+                 self._on_auto_load_toggle).pack(side="right")
+
+        # ── Profile list ─────────────────────────────────────
+        lst = T.card(self, "Saved Profiles", expand=True)
+        self.profiles_scroll = ctk.CTkScrollableFrame(
+            lst, fg_color="transparent",
+            scrollbar_button_color=T.BORDER_INPUT,
+        )
+        self.profiles_scroll.pack(fill="both", expand=True)
 
     def _refresh_list(self):
         for widget in self.profiles_scroll.winfo_children():
@@ -98,49 +57,40 @@ class ProfilesTab(ctk.CTkFrame):
 
         profiles = self.manager.list_profiles()
         if not profiles:
-            ctk.CTkLabel(
-                self.profiles_scroll, text="No saved profiles yet.",
-                text_color=_DIM, font=_LABEL_FONT,
-            ).pack(pady=16)
+            T.label(self.profiles_scroll,
+                    "No saved profiles yet - fill in your settings and save one above.",
+                    dim=True).pack(pady=24)
             return
 
-        for idx, name in enumerate(profiles):
+        last = self.manager.get_last_used()
+        for name in profiles:
             profile = self.manager.get(name)
-            bg = "#282840" if idx % 2 == 0 else "transparent"
-            row = ctk.CTkFrame(self.profiles_scroll, fg_color=bg, corner_radius=6)
-            row.pack(fill="x", pady=2)
+            row = ctk.CTkFrame(self.profiles_scroll, fg_color=T.BG_CARD_ALT,
+                               corner_radius=T.RADIUS_SM, border_width=1,
+                               border_color=T.BORDER)
+            row.pack(fill="x", pady=4, padx=(0, 6))
 
-            ctk.CTkLabel(
-                row, text=name, font=("Segoe UI", 13, "bold"),
-                width=180, anchor="w",
-            ).pack(side="left", padx=(10, 8), pady=8)
-
+            text = ctk.CTkFrame(row, fg_color="transparent")
+            text.pack(side="left", fill="x", expand=True, padx=14, pady=10)
+            title = T.label(text, name, bold=True)
+            title.pack(anchor="w")
             info_parts = []
             if profile.controller_url:
-                info_parts.append(f"ctrl={profile.controller_url}")
+                info_parts.append(f"Controller {profile.controller_url}")
             if profile.ssh_username:
-                info_parts.append(f"user={profile.ssh_username}")
+                info_parts.append(f"SSH {profile.ssh_username}")
             if profile.console_ip:
-                info_parts.append(f"console={profile.console_ip}")
-            ctk.CTkLabel(
-                row,
-                text=" | ".join(info_parts) if info_parts else "(empty)",
-                text_color=_DIM, font=("Segoe UI", 11), anchor="w",
-            ).pack(side="left", padx=4, pady=8, fill="x", expand=True)
+                info_parts.append(f"Console {profile.console_ip}")
+            sub = "   \u00b7   ".join(info_parts) if info_parts else "Empty profile"
+            if name == last:
+                sub += "   \u00b7   last used"
+            T.label(text, sub, dim=True, small=True).pack(anchor="w")
 
-            ctk.CTkButton(
-                row, text="Delete", width=70, height=28,
-                fg_color=_RED, hover_color=_RED_HOVER,
-                font=("Segoe UI", 11),
-                command=lambda n=name: self._delete_profile(n),
-            ).pack(side="right", padx=(4, 10), pady=8)
-
-            ctk.CTkButton(
-                row, text="Load", width=70, height=28,
-                fg_color=_ACCENT, hover_color="#1a4a70",
-                font=("Segoe UI", 11),
-                command=lambda n=name: self._load_profile(n),
-            ).pack(side="right", pady=8)
+            T.button(row, "Delete", lambda n=name: self._delete_profile(n),
+                     kind="ghost", width=70, text_color=T.DANGER).pack(
+                side="right", padx=(4, 12), pady=10)
+            T.button(row, "Load", lambda n=name: self._load_profile(n),
+                     kind="primary", width=70).pack(side="right", pady=10)
 
     def _on_save(self):
         name = self.var_name.get().strip()
@@ -182,8 +132,11 @@ class ProfilesTab(ctk.CTkFrame):
         if self.load_fields_fn:
             self.load_fields_fn(profile)
         self.log(f"Profile '{name}' loaded.")
+        self._refresh_list()
 
     def _delete_profile(self, name: str):
+        if not messagebox.askyesno("Delete profile", f"Delete profile '{name}'?"):
+            return
         if self.manager.delete(name):
             self.log(f"Profile '{name}' deleted.")
             self._refresh_list()

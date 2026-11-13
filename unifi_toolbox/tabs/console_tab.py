@@ -5,28 +5,7 @@ import customtkinter as ctk
 
 from ..core.api_client import UniFiAPI
 from ..utils import LogFn
-
-# Shared palette
-_CARD = "#2a2a3e"
-_ACCENT = "#0f3460"
-_GREEN = "#00b894"
-_GREEN_HOVER = "#00a381"
-_DIM = "#8a8a9a"
-_LABEL_FONT = ("Segoe UI", 12)
-_HEADING_FONT = ("Segoe UI", 13, "bold")
-_ENTRY_W = 260
-
-
-def _section(parent, title: str) -> ctk.CTkFrame:
-    card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
-    card.pack(fill="x", padx=4, pady=(0, 8))
-    ctk.CTkLabel(
-        card, text=title, font=_HEADING_FONT,
-        text_color="#ffffff", anchor="w",
-    ).pack(fill="x", padx=14, pady=(10, 2))
-    sep = ctk.CTkFrame(card, height=1, fg_color="#3a3a4e")
-    sep.pack(fill="x", padx=14, pady=(0, 8))
-    return card
+from .. import theme as T
 
 
 class ConsoleTab(ctk.CTkFrame):
@@ -38,95 +17,53 @@ class ConsoleTab(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
+        page = T.scroll_page(self)
+        T.page_header(
+            page, "Console / API",
+            "Sign in to a UniFi OS console to list or create sites and adopt devices by MAC.",
+        )
 
         # ── Console Connection ───────────────────────────────
-        conn_card = _section(scroll, "Console Connection")
-        grid = ctk.CTkFrame(conn_card, fg_color="transparent")
-        grid.pack(fill="x", padx=14, pady=(0, 10))
-        grid.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(grid, text="Console IP", font=_LABEL_FONT, anchor="e").grid(
-            row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        conn = T.card(page, "Console", "UDM, UDR, UDM-Pro, Cloud Key or self-hosted controller")
+        g = ctk.CTkFrame(conn, fg_color="transparent")
+        g.pack(fill="x")
         self.var_ip = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_ip, width=_ENTRY_W, height=32).grid(
-            row=0, column=1, sticky="w", pady=4)
-
-        ctk.CTkLabel(grid, text="Admin Username", font=_LABEL_FONT, anchor="e").grid(
-            row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_user = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_user, width=_ENTRY_W, height=32).grid(
-            row=1, column=1, sticky="w", pady=4)
-
-        ctk.CTkLabel(grid, text="Admin Password", font=_LABEL_FONT, anchor="e").grid(
-            row=2, column=0, sticky="e", padx=(0, 10), pady=4)
         self.var_pass = ctk.StringVar()
-        ctk.CTkEntry(grid, textvariable=self.var_pass, show="*", width=_ENTRY_W, height=32).grid(
-            row=2, column=1, sticky="w", pady=4)
-
+        T.field(g, 0, 0, "CONSOLE IP", lambda c: T.entry(c, self.var_ip, width=220))
+        T.field(g, 0, 1, "ADMIN USERNAME", lambda c: T.entry(c, self.var_user, width=200))
+        T.field(g, 0, 2, "ADMIN PASSWORD",
+                lambda c: T.entry(c, self.var_pass, width=200, show="\u2022"))
         self.var_ssl = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            grid, text="Verify SSL (uncheck for self-signed)", variable=self.var_ssl,
-            font=_LABEL_FONT, checkbox_width=20, checkbox_height=20,
-        ).grid(row=3, column=1, sticky="w", pady=4)
+        bottom = T.row(conn)
+        T.switch(bottom, "Verify SSL certificate (leave off for self-signed)",
+                 self.var_ssl).pack(side="left")
+        T.button(bottom, "Open Web UI", self._open_web, kind="secondary").pack(side="right")
 
-        # ── Actions ──────────────────────────────────────────
-        actions_card = _section(scroll, "Actions")
-        btn_row = ctk.CTkFrame(actions_card, fg_color="transparent")
-        btn_row.pack(fill="x", padx=14, pady=(0, 10))
-
-        ctk.CTkButton(
-            btn_row, text="Open Web Setup", command=self._open_web,
-            width=140, height=34, font=_LABEL_FONT,
-            fg_color=_ACCENT, hover_color="#1a4a70",
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            btn_row, text="List Sites", command=self._list_sites,
-            width=100, height=34, font=_LABEL_FONT,
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            btn_row, text="Create Site", command=self._create_site,
-            width=110, height=34, font=_LABEL_FONT,
-            fg_color="transparent", hover_color="#3a3a4e",
-            border_width=1, border_color="#4a4a5e",
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            btn_row, text="Adopt by MAC", command=self._adopt_mac,
-            width=130, height=34, font=("Segoe UI", 12, "bold"),
-            fg_color=_GREEN, hover_color=_GREEN_HOVER, text_color="#1a1a2e",
-        ).pack(side="left")
-
-        # ── Site / MAC inputs ────────────────────────────────
-        detail_card = _section(scroll, "Site & Device")
-        detail_grid = ctk.CTkFrame(detail_card, fg_color="transparent")
-        detail_grid.pack(fill="x", padx=14, pady=(0, 6))
-        detail_grid.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(detail_grid, text="Site Name", font=_LABEL_FONT, anchor="e").grid(
-            row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        # ── Sites ────────────────────────────────────────────
+        sites = T.card(page, "Sites", "Results appear in the activity log")
+        sg = ctk.CTkFrame(sites, fg_color="transparent")
+        sg.pack(fill="x")
         self.var_site = ctk.StringVar(value="default")
-        ctk.CTkEntry(detail_grid, textvariable=self.var_site, width=_ENTRY_W, height=32).grid(
-            row=0, column=1, sticky="w", pady=4)
+        T.field(sg, 0, 0, "SITE NAME", lambda c: T.entry(c, self.var_site, width=220))
+        sr = T.row(sites)
+        T.button(sr, "List Sites", self._list_sites, kind="primary").pack(side="left", padx=(0, 8))
+        T.button(sr, "Create Site", self._create_site).pack(side="left")
 
-        ctk.CTkLabel(detail_grid, text="Device MAC", font=_LABEL_FONT, anchor="e").grid(
-            row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        # ── Adopt by MAC ─────────────────────────────────────
+        adopt = T.card(
+            page, "Adopt by MAC",
+            "UXG / UAP / USW: adopt into an existing site.  UDM / UDR / UDM-Pro run "
+            "their own controller - create a site on the device itself.",
+        )
+        ag = ctk.CTkFrame(adopt, fg_color="transparent")
+        ag.pack(fill="x")
         self.var_mac = ctk.StringVar()
-        ctk.CTkEntry(
-            detail_grid, textvariable=self.var_mac, width=_ENTRY_W, height=32,
-            placeholder_text="aa:bb:cc:dd:ee:ff",
-        ).grid(row=1, column=1, sticky="w", pady=4)
-
-        ctk.CTkLabel(
-            detail_card,
-            text="Hint: UXG -> adopt to existing site. UDM/UDR/UDM-Pro -> create its own site.",
-            font=("Segoe UI", 11), text_color=_DIM,
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+        T.field(ag, 0, 0, "DEVICE MAC",
+                lambda c: T.entry(c, self.var_mac, width=220, mono=True),
+                hint="aa:bb:cc:dd:ee:ff  -  uses the Site Name above")
+        T.button(adopt, "Adopt Device", self._adopt_mac, kind="success",
+                 width=150).pack(anchor="w")
 
     # ── Logic ────────────────────────────────────────────────
 
